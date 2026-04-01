@@ -1,0 +1,123 @@
+# Barbershop Simulation
+
+```elixir
+Mix.install([
+  {:sim_ex, path: Path.join(__DIR__, "..")}
+])
+```
+
+## The Model
+
+A single barber, customers arriving every 18 minutes on average,
+haircuts taking 16 minutes on average. The classic GPSS example.
+
+```elixir
+defmodule Barbershop do
+  use Sim.DSL
+
+  model :barbershop do
+    resource :barber, capacity: 1
+
+    process :customer do
+      arrive every: exponential(18.0)
+      seize :barber
+      hold exponential(16.0)
+      release :barber
+      depart
+    end
+  end
+end
+```
+
+## Run It
+
+```elixir
+{:ok, result} = Barbershop.run(stop_time: 10_000.0, seed: 42)
+
+IO.puts("Customers served: #{result.stats[:customer].completed}")
+IO.puts("Mean wait: #{Float.round(result.stats[:customer].mean_wait, 2)} min")
+IO.puts("Mean haircut: #{Float.round(result.stats[:customer].mean_hold, 2)} min")
+IO.puts("Barber grants: #{result.stats[:barber].grants}")
+IO.puts("Events processed: #{result.events}")
+```
+
+## Two-Server Variant
+
+What if we add a second barber?
+
+```elixir
+defmodule Barbershop2 do
+  use Sim.DSL
+
+  model :barbershop2 do
+    resource :barber, capacity: 2
+
+    process :customer do
+      arrive every: exponential(18.0)
+      seize :barber
+      hold exponential(16.0)
+      release :barber
+      depart
+    end
+  end
+end
+
+{:ok, r1} = Barbershop.run(stop_time: 10_000.0, seed: 42)
+{:ok, r2} = Barbershop2.run(stop_time: 10_000.0, seed: 42)
+
+IO.puts("=== 1 barber ===")
+IO.puts("  Served: #{r1.stats[:customer].completed}")
+IO.puts("  Mean wait: #{Float.round(r1.stats[:customer].mean_wait, 2)} min")
+
+IO.puts("\n=== 2 barbers ===")
+IO.puts("  Served: #{r2.stats[:customer].completed}")
+IO.puts("  Mean wait: #{Float.round(r2.stats[:customer].mean_wait, 2)} min")
+```
+
+## Job Shop: Two Sequential Machines
+
+Parts arrive, go through a drill (2 parallel), then a lathe (1).
+
+```elixir
+defmodule JobShop do
+  use Sim.DSL
+
+  model :job_shop do
+    resource :drill, capacity: 2
+    resource :lathe, capacity: 1
+
+    process :part do
+      arrive every: exponential(10.0)
+      seize :drill
+      hold exponential(8.0)
+      release :drill
+      seize :lathe
+      hold exponential(12.0)
+      release :lathe
+      depart
+    end
+  end
+end
+
+{:ok, result} = JobShop.run(stop_time: 5_000.0, seed: 42)
+
+IO.puts("Parts completed: #{result.stats[:part].completed}")
+IO.puts("Drill grants: #{result.stats[:drill].grants}")
+IO.puts("Lathe grants: #{result.stats[:lathe].grants}")
+IO.puts("Mean wait: #{Float.round(result.stats[:part].mean_wait, 2)}")
+IO.puts("Mean processing: #{Float.round(result.stats[:part].mean_hold, 2)}")
+```
+
+## Tick-Diasca Mode
+
+Same barbershop, but with causal ordering guarantees.
+Events within a tick cascade through diascas before the tick advances.
+
+```elixir
+{:ok, diasca_result} = Barbershop.run(mode: :diasca, stop_tick: 10_000, seed: 42)
+
+IO.puts("Tick-diasca mode:")
+IO.puts("  Customers served: #{diasca_result.stats[:customer].completed}")
+IO.puts("  Final tick: #{diasca_result.tick}")
+IO.puts("  Events: #{diasca_result.events}")
+```
