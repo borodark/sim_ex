@@ -41,7 +41,7 @@ Sim.EntityManager ─ registry + dispatch
     ├── Sim.Resource ── capacity-limited server with FIFO queue
     ├── Sim.Source ──── arrival generator (exponential, constant)
     └── Sim.PHOLD ──── standard DES benchmark entity
-    
+
 Sim.Topology ──── ETS shared state (networks, occupancy, routing)
 Sim.Statistics ── Welford streaming mean/variance + batch means CI
 Sim.Experiment ── replications, CRN, paired comparison
@@ -111,7 +111,22 @@ receives an event, does minimal work, sends a new event to a random LP.
 
 ```bash
 mix run benchmark/phold_bench.exs
+
+Engine vs GenServer — PHOLD A/B Test
+============================================================
+Cores: 88
+
+LPs     Stop  Events      Engine(ms)  GS(ms)      Eng E/s       GS E/s        Speedup
+--------------------------------------------------------------------------------
+100     10.0  17565       61          485         287950        36216         8.0x
+1000    10.0  175940      1404        3746        125313        46967         2.7x
+10000   10.0  1758030     18293       41818       96103         42040         2.3x
+100     100.0 161723      633         2147        255486        75325         3.4x
+1000    100.0 1614913     12375       19340       130498        83501         1.6x
+10000   100.0 16156886    93348       381351      173082        42367         4.1x
+
 ```
+
 
 ## Writing Entities
 
@@ -158,7 +173,28 @@ comparison = Sim.Experiment.compare(
 # => %{mean_diff: -0.12, ci: {-0.18, -0.06}, significant: true}
 ```
 
-## Three Comrades
+## The Simulation That Learns
+
+Every DES engine does Monte Carlo: run 1,000 times, sample inputs from
+a fitted distribution, compute output confidence intervals. The input
+parameters are treated as known constants. They are not.
+
+sim_ex is the only DES engine where simulation inputs have proper Bayesian
+posteriors, where the model self-calibrates from streaming data, and where
+input structure is discovered nonparametrically.
+
+| What others do | What sim_ex + ecosystem does |
+|---|---|
+| Service time = Exponential(16) | Service time = Exponential(16.2 +/- 1.3) — full posterior from 200 observations (eXMC) |
+| Parameters frozen at model build | Parameters track drift in real time from sensor data (smc_ex O-SMC²) |
+| Analyst picks which inputs matter | BART discovers which 5 of 50 inputs drive output (StochTree-Ex) |
+| Output CI from replications only | Output CI includes epistemic uncertainty over input parameters |
+| Simultaneous events: FIFO | Simultaneous events: causal ordering via tick-diasca |
+
+Arena and AnyLogic have 30 years of domain libraries and 3D animation.
+We don't replace them. We add the statistical brain they don't have.
+
+## Les Quatre Probabileurs
 
 sim_ex is part of an Elixir probabilistic computing ecosystem:
 
