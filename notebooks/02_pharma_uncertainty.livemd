@@ -1,0 +1,382 @@
+# Pharmaceutical Packaging Line — Input Uncertainty Analysis
+
+```elixir
+Mix.install([
+  {:sim_ex, path: Path.join(__DIR__, "..")},
+  {:kino_vega_lite, "~> 0.1.13"},
+  {:kino, "~> 0.14"}
+])
+
+alias VegaLite, as: Vl
+```
+
+## Why This Matters
+
+Your packaging line simulation says throughput is 128 parts per shift. Your
+VP asks: should we buy a fourth inspection machine for $180K? The simulation
+says yes — throughput rises to 135.
+
+But the simulation lied. Not about the physics — about the confidence. That
+"128" is built on a service time of Exponential(5.2 minutes) at the fill
+station. Where did 5.2 come from? A time study. 200 observations. The sample
+mean was 5.2. But the true mean could be 4.8 or 5.6 — you measured 200 parts,
+not infinity. That 0.8-minute range, propagated through five stages, three
+machines each, with queueing and blocking, changes throughput by enough to
+flip the buy/don't-buy decision.
+
+Every simulation model has this problem. The inputs are estimated from data.
+The estimates have uncertainty. The simulation ignores that uncertainty and
+reports a single number. The decision-maker sees "128 parts" and thinks
+they know something. They don't. They know the output of one scenario
+drawn from a family of scenarios they never explored.
+
+**The question isn't "what is the throughput?" It's "what is the probability
+that throughput exceeds our target?"** A point estimate can't answer that.
+A distribution can.
+
+## Why This Is Usually Skipped
+
+Averill Law's *Simulation Modeling and Analysis* — the textbook, 23,700
+citations — calls input uncertainty analysis "rarely done because it's too
+expensive." The reason: you need 100-1,000 simulation replications, each
+with different parameter draws. If one simulation takes 30 seconds (typical
+for a commercial tool), 1,000 replications take 8 hours. Nobody budgets 8
+hours for what feels like "running the same model again."
+
+At 10 million events per second, it takes 68 milliseconds. One thousand
+replications: 68 seconds. The analysis that's "rarely done" becomes
+something you do before the meeting starts.
+
+## The Factory
+
+A pharmaceutical packaging line. Five stages. Real scenario, real stakes.
+
+**Fill → Cap → Label → Inspect → Box**
+
+## The Factory
+
+```elixir
+# Five-stage pharmaceutical packaging line
+# Service time posteriors: we observed 200 samples per stage
+# True posterior would come from eXMC NUTS; here we simulate it
+# as Normal(observed_mean, standard_error)
+
+stage_observations = %{
+  fill:    %{mean: 5.2, se: 0.35, n: 200},
+  cap:     %{mean: 3.8, se: 0.28, n: 200},
+  label:   %{mean: 4.1, se: 0.31, n: 200},
+  inspect: %{mean: 6.0, se: 0.42, n: 200},
+  box:     %{mean: 2.5, se: 0.18, n: 200}
+}
+
+stage_names = [:fill, :cap, :label, :inspect, :box]
+num_stages = length(stage_names)
+machines_per_stage = 3
+arrival_mean = 4.0
+stop_tick = 100_000
+
+IO.puts("Pharmaceutical Packaging Line")
+IO.puts("#{num_stages} stages × #{machines_per_stage} machines = #{num_stages * machines_per_stage} machines")
+IO.puts("Arrival rate: 1 every #{arrival_mean} min")
+IO.puts("")
+
+for {name, obs} <- stage_observations do
+  IO.puts("  #{name}: mean=#{obs.mean} ± #{obs.se} (n=#{obs.n})")
+end
+```
+
+## Point Estimate — The Traditional Way
+
+```elixir
+# Run once with "known" parameters (the observed means)
+steps =
+  Enum.flat_map(0..(num_stages - 1), fn i ->
+    obs = Map.fetch!(stage_observations, Enum.at(stage_names, i))
+    [{:seize, i}, {:hold, {:exponential, obs.mean}}, {:release, i}]
+  end) ++ [:depart]
+
+resources = for _ <- 0..(num_stages - 1), do: %{capacity: machines_per_stage}
+
+t0 = System.monotonic_time(:microsecond)
+
+{:ok, point_result} = Sim.run(
+  mode: :rust,
+  resources: resources,
+  processes: [%{steps: steps, arrival_mean: arrival_mean}],
+  stop_tick: stop_tick,
+  seed: 42,
+  batch_size: 1
+)
+
+point_us = System.monotonic_time(:microsecond) - t0
+point_stats = point_result.stats[:process_0]
+
+IO.puts("Point Estimate Result (#{div(point_us, 1000)}ms):")
+IO.puts("  Parts completed: #{point_stats.completed}")
+IO.puts("  Mean wait: #{Float.round(point_stats.mean_wait, 2)} min")
+IO.puts("  Mean processing: #{Float.round(point_stats.mean_hold, 2)} min")
+IO.puts("  Throughput: #{Float.round(point_stats.completed / (stop_tick / 480), 1)} parts/shift")
+```
+
+## Posterior-Propagated Uncertainty — The Bayesian Way
+
+```elixir
+# Sample service time parameters from their posteriors
+# Run 1,000 simulations, each with different parameter draws
+# This IS input uncertainty analysis — Law Ch. 12
+
+n_replications = 1000
+
+IO.puts("Running #{n_replications} replications with posterior-sampled parameters...")
+IO.puts("(Each replication draws service time means from Normal(observed_mean, SE))")
+IO.puts("")
+
+t0 = System.monotonic_time(:millisecond)
+
+results =
+  for rep <- 1..n_replications do
+    # Sample parameters from posterior (Normal approximation)
+    # In production: these would come from eXMC NUTS trace rows
+    :rand.seed(:exsss, {rep, rep * 7, rep * 13})
+
+    sampled_means =
+      Enum.map(stage_names, fn name ->
+        obs = Map.fetch!(stage_observations, name)
+        # Posterior sample: mean ± SE (Normal approximation to posterior)
+        obs.mean + :rand.normal() * obs.se
+        |> max(0.5)  # physical constraint: service time > 0.5 min
+      end)
+
+    # Build steps with sampled parameters
+    steps =
+      sampled_means
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {mean, i} ->
+        [{:seize, i}, {:hold, {:exponential, mean}}, {:release, i}]
+      end)
+      |> Kernel.++([:depart])
+
+    {:ok, r} = Sim.run(
+      mode: :rust,
+      resources: resources,
+      processes: [%{steps: steps, arrival_mean: arrival_mean}],
+      stop_tick: stop_tick,
+      seed: rep + 10_000,
+      batch_size: 1
+    )
+
+    stats = r.stats[:process_0]
+    throughput = stats.completed / (stop_tick / 480)
+
+    %{
+      rep: rep,
+      completed: stats.completed,
+      mean_wait: stats.mean_wait,
+      mean_hold: stats.mean_hold,
+      throughput: throughput,
+      fill_mean: Enum.at(sampled_means, 0),
+      inspect_mean: Enum.at(sampled_means, 3)
+    }
+  end
+
+wall_ms = System.monotonic_time(:millisecond) - t0
+
+IO.puts("#{n_replications} replications completed in #{wall_ms}ms")
+IO.puts("  Per replication: #{Float.round(wall_ms / n_replications, 1)}ms")
+IO.puts("  Events/sec: ~#{trunc(point_result.events * n_replications / (wall_ms / 1000))}")
+```
+
+## Results — Point Estimate vs Full Posterior
+
+```elixir
+throughputs = Enum.map(results, & &1.throughput)
+waits = Enum.map(results, & &1.mean_wait)
+
+mean_tp = Enum.sum(throughputs) / length(throughputs)
+sorted = Enum.sort(throughputs)
+ci_lo = Enum.at(sorted, trunc(0.025 * length(sorted)))
+ci_hi = Enum.at(sorted, trunc(0.975 * length(sorted)))
+
+point_tp = point_result.stats[:process_0].completed / (stop_tick / 480)
+
+IO.puts("═══════════════════════════════════════════════════")
+IO.puts("")
+IO.puts("  Point estimate:     #{Float.round(point_tp, 1)} parts/shift")
+IO.puts("  Posterior mean:     #{Float.round(mean_tp, 1)} parts/shift")
+IO.puts("  95% credible interval: [#{Float.round(ci_lo, 1)}, #{Float.round(ci_hi, 1)}]")
+IO.puts("  Range:              #{Float.round(ci_hi - ci_lo, 1)} parts/shift")
+IO.puts("")
+IO.puts("  The point estimate says \"#{Float.round(point_tp, 0)} parts.\"")
+IO.puts("  The posterior says \"#{Float.round(ci_lo, 0)} to #{Float.round(ci_hi, 0)} parts,")
+IO.puts("  and here is the probability of each.\"")
+IO.puts("")
+IO.puts("  One number. Or a distribution. Choose.")
+IO.puts("")
+IO.puts("═══════════════════════════════════════════════════")
+```
+
+## Throughput Distribution
+
+```elixir
+Vl.new(width: 600, height: 300, title: "Throughput Distribution (1,000 replications)")
+|> Vl.data_from_values(Enum.map(results, fn r -> %{throughput: r.throughput} end))
+|> Vl.mark(:bar, opacity: 0.7)
+|> Vl.encode_field(:x, "throughput",
+  type: :quantitative,
+  bin: [maxbins: 40],
+  title: "Parts per shift"
+)
+|> Vl.encode(:y, aggregate: :count, title: "Count")
+|> Vl.encode(:color, value: "#d4a574")
+```
+
+## Wait Time Distribution
+
+```elixir
+Vl.new(width: 600, height: 300, title: "Mean Wait Distribution (1,000 replications)")
+|> Vl.data_from_values(Enum.map(results, fn r -> %{wait: r.mean_wait} end))
+|> Vl.mark(:bar, opacity: 0.7)
+|> Vl.encode_field(:x, "wait",
+  type: :quantitative,
+  bin: [maxbins: 40],
+  title: "Mean wait (minutes)"
+)
+|> Vl.encode(:y, aggregate: :count, title: "Count")
+|> Vl.encode(:color, value: "#2563eb")
+```
+
+## What Drives the Variance? Inspect Stage Dominance
+
+```elixir
+# Scatter: sampled inspect_mean vs throughput
+# The inspect stage has the highest SE (0.42) — does it dominate output uncertainty?
+
+Vl.new(width: 600, height: 300,
+  title: "Inspect Stage Service Time vs Throughput")
+|> Vl.data_from_values(
+  Enum.map(results, fn r ->
+    %{inspect_mean: r.inspect_mean, throughput: r.throughput}
+  end)
+)
+|> Vl.mark(:circle, opacity: 0.4, size: 20)
+|> Vl.encode_field(:x, "inspect_mean",
+  type: :quantitative,
+  title: "Sampled inspect service mean (min)"
+)
+|> Vl.encode_field(:y, "throughput",
+  type: :quantitative,
+  title: "Parts per shift"
+)
+|> Vl.encode(:color, value: "#f59e0b")
+```
+
+## Capacity Planning Under Uncertainty
+
+```elixir
+# What if we add a 4th inspect machine?
+# Run 200 replications with 4 inspect machines, same posterior
+
+results_4inspect =
+  for rep <- 1..200 do
+    :rand.seed(:exsss, {rep, rep * 7, rep * 13})
+
+    sampled_means =
+      Enum.map(stage_names, fn name ->
+        obs = Map.fetch!(stage_observations, name)
+        max(0.5, obs.mean + :rand.normal() * obs.se)
+      end)
+
+    steps =
+      sampled_means
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {mean, i} ->
+        [{:seize, i}, {:hold, {:exponential, mean}}, {:release, i}]
+      end)
+      |> Kernel.++([:depart])
+
+    # 4th inspect machine (stage index 3)
+    resources_4 =
+      Enum.with_index(resources)
+      |> Enum.map(fn {r, i} ->
+        if i == 3, do: %{capacity: 4}, else: r
+      end)
+
+    {:ok, r} = Sim.run(
+      mode: :rust,
+      resources: resources_4,
+      processes: [%{steps: steps, arrival_mean: arrival_mean}],
+      stop_tick: stop_tick,
+      seed: rep + 10_000,
+      batch_size: 1
+    )
+
+    stats = r.stats[:process_0]
+    %{throughput: stats.completed / (stop_tick / 480), config: "4 inspect"}
+  end
+
+# Combine for comparison plot
+comparison_data =
+  Enum.map(Enum.take(results, 200), fn r ->
+    %{throughput: r.throughput, config: "3 inspect (current)"}
+  end) ++ results_4inspect
+
+Vl.new(width: 600, height: 300,
+  title: "Capacity Decision: Add 4th Inspect Machine?")
+|> Vl.data_from_values(comparison_data)
+|> Vl.mark(:bar, opacity: 0.6)
+|> Vl.encode_field(:x, "throughput",
+  type: :quantitative,
+  bin: [maxbins: 30],
+  title: "Parts per shift"
+)
+|> Vl.encode(:y, aggregate: :count, title: "Count")
+|> Vl.encode_field(:color, "config",
+  type: :nominal,
+  title: "Configuration",
+  scale: %{range: ["#2563eb", "#f59e0b"]}
+)
+```
+
+## The Verdict
+
+```elixir
+tp_3 = Enum.map(Enum.take(results, 200), & &1.throughput)
+tp_4 = Enum.map(results_4inspect, & &1.throughput)
+
+mean_3 = Enum.sum(tp_3) / length(tp_3)
+mean_4 = Enum.sum(tp_4) / length(tp_4)
+
+sorted_3 = Enum.sort(tp_3)
+sorted_4 = Enum.sort(tp_4)
+ci_lo_3 = Enum.at(sorted_3, 5)
+ci_hi_3 = Enum.at(sorted_3, 194)
+ci_lo_4 = Enum.at(sorted_4, 5)
+ci_hi_4 = Enum.at(sorted_4, 194)
+
+# P(4th machine improves throughput by >10%)
+improvement_pct =
+  Enum.zip(tp_3, tp_4)
+  |> Enum.count(fn {a, b} -> b > a * 1.10 end)
+  |> then(fn c -> c / length(tp_3) * 100 end)
+
+IO.puts("═══════════════════════════════════════════════════")
+IO.puts("")
+IO.puts("  3 inspect machines:")
+IO.puts("    Mean: #{Float.round(mean_3, 1)} parts/shift")
+IO.puts("    95% CI: [#{Float.round(ci_lo_3, 1)}, #{Float.round(ci_hi_3, 1)}]")
+IO.puts("")
+IO.puts("  4 inspect machines:")
+IO.puts("    Mean: #{Float.round(mean_4, 1)} parts/shift")
+IO.puts("    95% CI: [#{Float.round(ci_lo_4, 1)}, #{Float.round(ci_hi_4, 1)}]")
+IO.puts("")
+IO.puts("  P(4th machine adds >10% throughput): #{Float.round(improvement_pct, 1)}%")
+IO.puts("")
+IO.puts("  A point estimate would say \"buy it\" or \"don't.\"")
+IO.puts("  The posterior says \"there is a #{Float.round(improvement_pct, 0)}% chance")
+IO.puts("  it's worth the investment.\" The machine costs $180K.")
+IO.puts("  Is #{Float.round(improvement_pct, 0)}% enough?")
+IO.puts("")
+IO.puts("  That is a question for the business, not the model.")
+IO.puts("  The model's job is to give them the number.")
+IO.puts("═══════════════════════════════════════════════════")
+```

@@ -6,6 +6,27 @@ Mix.install([
 ])
 ```
 
+## Why This Matters
+
+Every queueing system — factory floor, hospital ED, call center, airport
+security — shares the same question: **how long will I wait?** The answer
+depends on the arrival rate, the service rate, and the number of servers.
+For an M/M/1 queue (one server, random arrivals, random service), the
+theory gives exact answers. For everything else — multiple stages, blocking,
+breakdowns, shift changes — you simulate.
+
+The barbershop is the hello-world of simulation. One barber, random
+customers, random haircuts. It's trivial on purpose: if the engine can't
+get this right, it can't get anything right. We verify against M/M/1
+theory (Erlang, 1909), then scale up to two barbers, then to a two-stage
+job shop. Each step adds complexity the theory can't handle. The
+simulation handles it in the same five lines.
+
+The deeper question: **can a manufacturing engineer read and modify this
+model?** Not an Elixir developer — a domain expert who knows what
+`seize :barber` means because they've written Arena flowcharts for ten
+years. The DSL is the point. The barbershop proves it works.
+
 ## The Model
 
 A single barber, customers arriving every 18 minutes on average,

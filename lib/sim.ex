@@ -66,7 +66,10 @@ defmodule Sim do
   def run(opts) do
     case Keyword.get(opts, :mode, :engine) do
       :engine -> Sim.Engine.run(opts)
+      :ets -> Sim.Engine.ETS.run(opts)
       :diasca -> Sim.Engine.Diasca.run(opts)
+      :parallel -> Sim.Engine.Parallel.run(opts)
+      :rust -> Sim.Engine.Rust.run(opts)
       :genserver -> run_genserver(opts)
     end
   end
