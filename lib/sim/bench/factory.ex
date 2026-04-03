@@ -33,16 +33,17 @@ defmodule Sim.Bench.Factory do
   def init(config) do
     seed = config[:seed] || :erlang.phash2(config.id)
 
-    {:ok, %__MODULE__{
-      id: config.id,
-      stage: config[:stage] || 0,
-      num_stages: config[:num_stages] || 1,
-      next_stage: config[:next_stage],
-      capacity: config[:capacity] || 1,
-      service_dist: config[:service_dist] || :exponential,
-      service_mean: config[:service_mean] || 1.0,
-      rand_state: :rand.seed(:exsss, {seed, seed * 7 + 1, seed * 13 + 3})
-    }}
+    {:ok,
+     %__MODULE__{
+       id: config.id,
+       stage: config[:stage] || 0,
+       num_stages: config[:num_stages] || 1,
+       next_stage: config[:next_stage],
+       capacity: config[:capacity] || 1,
+       service_dist: config[:service_dist] || :exponential,
+       service_mean: config[:service_mean] || 1.0,
+       rand_state: :rand.seed(:exsss, {seed, seed * 7 + 1, seed * 13 + 3})
+     }}
   end
 
   @impl true
@@ -53,11 +54,12 @@ defmodule Sim.Bench.Factory do
       {service_time, rs} = sample(state)
       depart_time = clock + service_time
 
-      state = %{state |
-        busy: state.busy + 1,
-        rand_state: rs,
-        total_wait: state.total_wait + 0.0,
-        total_service: state.total_service + service_time
+      state = %{
+        state
+        | busy: state.busy + 1,
+          rand_state: rs,
+          total_wait: state.total_wait + 0.0,
+          total_service: state.total_service + service_time
       }
 
       {:ok, state, [{depart_time, state.id, {:depart, job_id, arrival_time}}]}
@@ -85,11 +87,12 @@ defmodule Sim.Bench.Factory do
         {service_time, rs} = sample(state)
         depart_time = clock + service_time
 
-        state = %{state |
-          queue: queue,
-          rand_state: rs,
-          total_wait: state.total_wait + wait,
-          total_service: state.total_service + service_time
+        state = %{
+          state
+          | queue: queue,
+            rand_state: rs,
+            total_wait: state.total_wait + wait,
+            total_service: state.total_service + service_time
         }
 
         depart_event = [{depart_time, state.id, {:depart, next_job, orig_arr}}]
@@ -154,24 +157,27 @@ defmodule Sim.Bench.Factory do
       |> Enum.map(fn {id, idx} ->
         next = if idx < num_stages - 1, do: Enum.at(stage_ids, idx + 1), else: nil
 
-        {id, __MODULE__, %{
-          id: id,
-          stage: idx,
-          num_stages: num_stages,
-          next_stage: next,
-          capacity: machines,
-          service_mean: svc_mean,
-          seed: seed + idx
-        }}
+        {id, __MODULE__,
+         %{
+           id: id,
+           stage: idx,
+           num_stages: num_stages,
+           next_stage: next,
+           capacity: machines,
+           service_mean: svc_mean,
+           seed: seed + idx
+         }}
       end)
 
     # Source entity
-    source = {:source, Sim.Source, %{
-      id: :source,
-      target: hd(stage_ids),
-      interarrival: {:exponential, ia_mean},
-      seed: seed + 1000
-    }}
+    source =
+      {:source, Sim.Source,
+       %{
+         id: :source,
+         target: hd(stage_ids),
+         interarrival: {:exponential, ia_mean},
+         seed: seed + 1000
+       }}
 
     entities = [source | stage_entities]
     initial_events = [{0.0, :source, :generate}]

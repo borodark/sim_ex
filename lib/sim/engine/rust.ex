@@ -62,11 +62,12 @@ defmodule Sim.Engine.Rust do
       processes
       |> Enum.with_index()
       |> Enum.map(fn {_proc, i} ->
-        {:"process_#{i}", %{
-          completed: Enum.at(completions, i, 0),
-          mean_wait: Enum.at(mean_waits, i, 0.0),
-          mean_hold: Enum.at(mean_holds, i, 0.0)
-        }}
+        {:"process_#{i}",
+         %{
+           completed: Enum.at(completions, i, 0),
+           mean_wait: Enum.at(mean_waits, i, 0.0),
+           mean_hold: Enum.at(mean_holds, i, 0.0)
+         }}
       end)
       |> Map.new()
 
@@ -74,18 +75,20 @@ defmodule Sim.Engine.Rust do
       resources
       |> Enum.with_index()
       |> Enum.map(fn {_res, i} ->
-        {:"resource_#{i}", %{
-          grants: Enum.at(grants, i, 0),
-          releases: Enum.at(releases, i, 0)
-        }}
+        {:"resource_#{i}",
+         %{
+           grants: Enum.at(grants, i, 0),
+           releases: Enum.at(releases, i, 0)
+         }}
       end)
       |> Map.new()
 
-    {:ok, %{
-      events: events,
-      tick: stop_tick,
-      stats: Map.merge(process_stats, resource_stats)
-    }}
+    {:ok,
+     %{
+       events: events,
+       tick: stop_tick,
+       stats: Map.merge(process_stats, resource_stats)
+     }}
   end
 
   # --- Step encoding ---

@@ -13,13 +13,14 @@ defmodule Sim.Bench.DiascaPhold do
     seed = config[:seed] || config.id
     seed_val = if is_integer(seed), do: seed, else: :erlang.phash2(seed)
 
-    {:ok, %__MODULE__{
-      id: config.id,
-      num_lps: config.num_lps,
-      remote_fraction: config[:remote_fraction] || 0.25,
-      mean_delay: config[:mean_delay] || 1.0,
-      rand_state: :rand.seed(:exsss, {seed_val, seed_val * 7 + 1, seed_val * 13 + 3})
-    }}
+    {:ok,
+     %__MODULE__{
+       id: config.id,
+       num_lps: config.num_lps,
+       remote_fraction: config[:remote_fraction] || 0.25,
+       mean_delay: config[:mean_delay] || 1.0,
+       rand_state: :rand.seed(:exsss, {seed_val, seed_val * 7 + 1, seed_val * 13 + 3})
+     }}
   end
 
   @impl true

@@ -86,11 +86,12 @@ defmodule Sim.Engine.ETS do
     :ets.delete(entity_table)
     :ets.delete(module_table)
 
-    {:ok, %{
-      clock: engine.clock,
-      events: engine.events_processed,
-      stats: stats
-    }}
+    {:ok,
+     %{
+       clock: engine.clock,
+       events: engine.events_processed,
+       stats: stats
+     }}
   end
 
   # --- Tight loop: ETS lookup/insert instead of Map fetch/put ---
@@ -120,11 +121,12 @@ defmodule Sim.Engine.ETS do
           # Insert new events into calendar
           {calendar, seq} = insert_events(calendar, engine.seq, new_events)
 
-          %{engine |
-            calendar: calendar,
-            seq: seq,
-            clock: time,
-            events_processed: engine.events_processed + 1
+          %{
+            engine
+            | calendar: calendar,
+              seq: seq,
+              clock: time,
+              events_processed: engine.events_processed + 1
           }
           |> loop()
         end

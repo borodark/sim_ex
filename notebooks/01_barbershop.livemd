@@ -32,6 +32,12 @@ years. The DSL is the point. The barbershop proves it works.
 A single barber, customers arriving every 18 minutes on average,
 haircuts taking 16 minutes on average. The classic GPSS example.
 
+Read it out loud. A customer arrives every 18 minutes on average. The
+customer seizes the barber. The barber holds for 16 minutes on average.
+The customer releases the barber and departs. If you have built Arena
+flowcharts, you recognize CREATE, PROCESS, RELEASE, DISPOSE — the same
+verbs, the same flow.
+
 ```elixir
 defmodule Barbershop do
   use Sim.DSL
@@ -52,19 +58,30 @@ end
 
 ## Run It
 
-```elixir
-{:ok, result} = Barbershop.run(stop_time: 10_000.0, seed: 42)
+The utilization rho = 16/18 = 0.89. Erlang's 1909 formula gives the
+theoretical mean wait: Wq = rho / (mu * (1 - rho)) = 128 minutes.
+Our simulation should be in that neighborhood — not exact, because
+Monte Carlo noise on finite runs, but close enough to trust.
 
-IO.puts("Customers served: #{result.stats[:customer].completed}")
-IO.puts("Mean wait: #{Float.round(result.stats[:customer].mean_wait, 2)} min")
-IO.puts("Mean haircut: #{Float.round(result.stats[:customer].mean_hold, 2)} min")
-IO.puts("Barber grants: #{result.stats[:barber].grants}")
-IO.puts("Events processed: #{result.events}")
+```elixir
+{:ok, result} = Barbershop.run(stop_time: 50_000.0, seed: 42)
+
+rho = 16.0 / 18.0
+theory_wq = rho / (1.0 / 16.0 * (1.0 - rho))
+
+IO.puts("Customers served:   #{result.stats[:customer].completed}")
+IO.puts("Mean wait (sim):    #{Float.round(result.stats[:customer].mean_wait, 2)} min")
+IO.puts("Mean wait (Erlang): #{Float.round(theory_wq, 2)} min")
+IO.puts("Mean haircut:       #{Float.round(result.stats[:customer].mean_hold, 2)} min")
+IO.puts("Events processed:   #{result.events}")
 ```
 
-## Two-Server Variant
+## The Second Barber
 
-What if we add a second barber?
+The barbershop is busy. Customers wait 100+ minutes. The owner considers
+hiring a second barber. In Erlang's world, this is an M/M/2 queue — the
+formula exists but is more complex. In the simulation world, it is one
+number: `capacity: 2`.
 
 ```elixir
 defmodule Barbershop2 do
@@ -83,21 +100,35 @@ defmodule Barbershop2 do
   end
 end
 
-{:ok, r1} = Barbershop.run(stop_time: 10_000.0, seed: 42)
-{:ok, r2} = Barbershop2.run(stop_time: 10_000.0, seed: 42)
+{:ok, r1} = Barbershop.run(stop_time: 50_000.0, seed: 42)
+{:ok, r2} = Barbershop2.run(stop_time: 50_000.0, seed: 42)
 
 IO.puts("=== 1 barber ===")
 IO.puts("  Served: #{r1.stats[:customer].completed}")
 IO.puts("  Mean wait: #{Float.round(r1.stats[:customer].mean_wait, 2)} min")
-
-IO.puts("\n=== 2 barbers ===")
+IO.puts("")
+IO.puts("=== 2 barbers ===")
 IO.puts("  Served: #{r2.stats[:customer].completed}")
 IO.puts("  Mean wait: #{Float.round(r2.stats[:customer].mean_wait, 2)} min")
+IO.puts("")
+IO.puts("Reduction: #{Float.round((1 - r2.stats[:customer].mean_wait / r1.stats[:customer].mean_wait) * 100, 1)}%")
 ```
+
+One number changed. The wait dropped. The simulation handled the M/M/2
+queue — and it would handle M/M/17 the same way, or a queue with
+breakdowns, or a queue where the service time depends on the time of day.
+The formula can't. The five lines can.
 
 ## Job Shop: Two Sequential Machines
 
-Parts arrive, go through a drill (2 parallel), then a lathe (1).
+Now the factory. Not a barbershop — a two-stage job shop. Parts arrive,
+go through a drill press (2 parallel machines), then a lathe (1 machine).
+Sequential stages, different capacities, different service times.
+
+Erlang has no formula for this. There is no closed-form solution for a
+tandem queue with different service rates. Every manufacturing engineer
+has lived this problem. The DSL reads like the routing sheet on the
+shop floor.
 
 ```elixir
 defmodule JobShop do
@@ -120,19 +151,45 @@ defmodule JobShop do
   end
 end
 
-{:ok, result} = JobShop.run(stop_time: 5_000.0, seed: 42)
+{:ok, result} = JobShop.run(stop_time: 20_000.0, seed: 42)
 
-IO.puts("Parts completed: #{result.stats[:part].completed}")
-IO.puts("Drill grants: #{result.stats[:drill].grants}")
-IO.puts("Lathe grants: #{result.stats[:lathe].grants}")
-IO.puts("Mean wait: #{Float.round(result.stats[:part].mean_wait, 2)}")
-IO.puts("Mean processing: #{Float.round(result.stats[:part].mean_hold, 2)}")
+IO.puts("Parts completed:   #{result.stats[:part].completed}")
+IO.puts("Drill utilization: #{result.stats[:drill].grants} grants")
+IO.puts("Lathe utilization: #{result.stats[:lathe].grants} grants")
+IO.puts("Mean wait:         #{Float.round(result.stats[:part].mean_wait, 2)} min")
+IO.puts("Mean processing:   #{Float.round(result.stats[:part].mean_hold, 2)} min")
 ```
+
+## The Arena Translator
+
+If you've used Arena, Simio, or FlexSim, here's the mapping:
+
+| Arena / Simio | sim_ex DSL | Notes |
+|---|---|---|
+| CREATE | `arrive every: ...` | Stationary interarrival |
+| CREATE (schedule) | `arrive schedule: [...]` | Non-stationary arrivals |
+| PROCESS (Seize-Delay-Release) | `seize / hold / release` | Split into three verbs |
+| ROUTE | `route distribution` | Travel delay |
+| DECIDE | `decide prob, :label` | Probabilistic branch |
+| SEPARATE / BATCH | `split N` / `batch N` | Unbundling / batching |
+| COMBINE | `combine N` | Assembly (N → 1) |
+| DISPOSE | `depart` | Collects statistics |
+| RESOURCE | `resource :r, capacity: N` | Fixed capacity |
+| SCHEDULE | `resource :r, schedule: [...]` | Time-varying capacity |
+
+All 11 verbs (with multi-form arrive and decide) are implemented
+and tested (61 tests pass).
 
 ## Tick-Diasca Mode
 
-Same barbershop, but with causal ordering guarantees.
-Events within a tick cascade through diascas before the tick advances.
+Same barbershop, but with causal ordering guarantees. Events within a
+tick cascade through diascas before the tick advances. This is the
+Sim-Diasca pattern (EDF, 2010) — when two events happen at the same
+simulated time, cause always precedes effect.
+
+Lamport showed in 1978 that logical clocks are sufficient for causal
+ordering. The tick-diasca model implements this with a two-level
+timestamp: `{tick, diasca}`.
 
 ```elixir
 {:ok, diasca_result} = Barbershop.run(mode: :diasca, stop_tick: 10_000, seed: 42)
@@ -142,3 +199,14 @@ IO.puts("  Customers served: #{diasca_result.stats[:customer].completed}")
 IO.puts("  Final tick: #{diasca_result.tick}")
 IO.puts("  Events: #{diasca_result.events}")
 ```
+
+## What Comes Next
+
+This notebook gives you one number: throughput, or mean wait. That number
+is a point estimate — one draw from a family of possible outcomes. It
+assumes you know the service times exactly. You don't.
+
+The [pharma packaging notebook](02_pharma_uncertainty.livemd) runs the
+simulation 1,000 times with different plausible parameters. The output
+isn't one number — it's a distribution. The analysis that Averill Law
+called "rarely done because it's too expensive" takes 68 seconds.

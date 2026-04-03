@@ -111,12 +111,13 @@ defmodule Sim.Engine.Parallel do
     :ets.delete(entity_table)
     :ets.delete(module_table)
 
-    {:ok, %{
-      tick: engine.tick,
-      diasca: engine.diasca,
-      events: engine.events_processed,
-      stats: stats
-    }}
+    {:ok,
+     %{
+       tick: engine.tick,
+       diasca: engine.diasca,
+       events: engine.events_processed,
+       stats: stats
+     }}
   end
 
   # --- Persistent worker process ---
@@ -171,12 +172,13 @@ defmodule Sim.Engine.Parallel do
 
           {calendar, seq} = insert_diasca_events(calendar, engine.seq, tick, diasca, new_events)
 
-          %{engine |
-            calendar: calendar,
-            seq: seq,
-            tick: tick,
-            diasca: diasca,
-            events_processed: engine.events_processed + count
+          %{
+            engine
+            | calendar: calendar,
+              seq: seq,
+              tick: tick,
+              diasca: diasca,
+              events_processed: engine.events_processed + count
           }
           |> loop()
         end
@@ -270,7 +272,9 @@ defmodule Sim.Engine.Parallel do
     insert_diasca_events(calendar, seq + 1, tick, diasca, rest)
   end
 
-  defp insert_diasca_events(calendar, seq, tick, diasca, [{:tick, future_tick, target, event} | rest])
+  defp insert_diasca_events(calendar, seq, tick, diasca, [
+         {:tick, future_tick, target, event} | rest
+       ])
        when future_tick > tick do
     calendar = :gb_trees.insert({future_tick, 0, seq}, {target, event}, calendar)
     insert_diasca_events(calendar, seq + 1, tick, diasca, rest)

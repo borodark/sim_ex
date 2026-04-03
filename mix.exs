@@ -12,9 +12,9 @@ defmodule Sim.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description:
-        "Discrete-event simulation engine for the BEAM. " <>
-          "Lightweight processes as entities, ETS topology, barrier synchronization. " <>
-          "Zero dependencies.",
+        "Discrete-event simulation engine for the BEAM with GPSS/Arena-style DSL. " <>
+          "11 verbs: seize, hold, release, decide, batch, split, combine, route, label, depart. " <>
+          "Rust NIF engine at 15M events/sec. Zero runtime dependencies.",
       package: package(),
       docs: docs(),
       source_url: @source_url,
@@ -40,7 +40,8 @@ defmodule Sim.MixProject do
         "GitHub" => @source_url,
         "Website" => "http://dataalienist.com"
       },
-      files: ~w(lib mix.exs README.md LICENSE CHANGELOG.md)
+      files:
+        ~w(lib native/sim_nif/src native/sim_nif/Cargo.toml native/sim_nif/Cargo.lock mix.exs README.md LICENSE CHANGELOG.md .formatter.exs)
     ]
   end
 

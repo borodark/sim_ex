@@ -21,3 +21,10 @@ sim_ex-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+
+# Rust NIF build artifacts (Rustler rebuilds on mix compile)
+/native/sim_nif/target/
+/priv/native/
+
+# Benchmark logs
+*.log

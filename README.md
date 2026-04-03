@@ -3,7 +3,7 @@
 Discrete-event simulation engine for the BEAM.
 
 Lightweight processes as entities, ETS-based shared topology,
-barrier synchronization, streaming Welford statistics. Zero dependencies.
+barrier synchronization, streaming Welford statistics. Zero runtime dependencies.
 
 
 ![Atom DSL](assets/barbershop.png)
@@ -53,7 +53,7 @@ Sim.Experiment ── replications, CRN, paired comparison
 2. **ETS for topology** — shared reads are free, writes are rare. No actor-per-link bottleneck.
 3. **Barrier synchronization** — all entities complete current event before clock advances. Simple, correct.
 4. **Functional PRNG** — `:rand` state threaded through entities. Same seed = same trajectory. CRN for free.
-5. **Zero dependencies** — pure Elixir + OTP. Optional integration with Les Trois Chambrées.
+5. **Zero runtime dependencies** — pure Elixir + OTP for core engines. Rust toolchain for NIF engine. Optional integration with Les Quatre Probabileurs.
 
 ## DSL for Subject Matter Experts
 
@@ -80,7 +80,59 @@ Barbershop.run(stop_time: 10_000.0, seed: 42)
 ```
 
 No magic runtime. `mix compile` generates standard `Sim.Entity` modules.
-Works in both engine and tick-diasca modes.
+Works in engine, ETS, tick-diasca, parallel, and Rust modes.
+
+### DSL Verbs — Arena Core Coverage
+
+| Verb | Arena Equivalent | Description |
+|------|-----------------|-------------|
+| `arrive every:` | CREATE | Stationary interarrival |
+| `arrive schedule:` | CREATE (schedule) | Non-stationary (time-varying rate) |
+| `seize :resource` | SEIZE | Request capacity, block if busy |
+| `hold distribution` | DELAY | Consume time |
+| `release :resource` | RELEASE | Free capacity |
+| `route distribution` | ROUTE | Travel delay (no resource) |
+| `decide prob, :label` | DECIDE | Binary probabilistic branch |
+| `decide [{p, :l}, ...]` | DECIDE | Multi-way weighted routing |
+| `batch N` | BATCH | Accumulate N parts |
+| `split N` | SEPARATE | One part becomes N |
+| `combine N` | COMBINE / MATCH | N parts merge into one |
+| `label :name` | STATION | Jump target for decide |
+| `depart` | DISPOSE | Exit, collect statistics |
+| `resource :r, capacity: N` | RESOURCE | Fixed capacity |
+| `resource :r, schedule: [...]` | SCHEDULE | Time-varying capacity by shift |
+
+### Advanced Example — Electronics Manufacturing
+
+```elixir
+defmodule Electronics do
+  use Sim.DSL
+
+  model :electronics do
+    resource :solder, capacity: 8
+    resource :inspector, schedule: [{0..479, 3}, {480..959, 1}]
+    resource :rework, capacity: 1
+
+    process :pcb do
+      arrive schedule: [{0..479, {:exponential, 3.0}},
+                        {480..959, {:exponential, 6.0}}]
+      split 4                          # PCB → 4 panels
+      seize :solder
+      hold exponential(3.0)
+      release :solder
+      decide 0.05, :rework_panel       # 5% fail inspection
+      combine 4                         # 4 panels → 1 board
+      batch 10                          # 10 boards → 1 tray
+      depart
+      label :rework_panel
+      seize :rework
+      hold exponential(6.0)
+      release :rework
+      depart
+    end
+  end
+end
+```
 
 ## Tick-Diasca Engine
 
@@ -104,27 +156,46 @@ Sim.run(
 )
 ```
 
-## PHOLD Benchmark
+## Benchmarks
 
-The standard synthetic benchmark for DES engines. Each logical process
-receives an event, does minimal work, sends a new event to a random LP.
+88-core Xeon E5-2699 v4, OTP 27, Elixir 1.18.3.
+
+### Elixir Engine (PHOLD)
+
+| LPs | Events | Engine E/s | GenServer E/s | Speedup |
+|-----|--------|-----------|--------------|---------|
+| 100 | 162K | 533K | 88K | 6.1x |
+| 1,000 | 1.6M | 159K | 57K | 2.8x |
+| 10,000 | 16.2M | 140K | 38K | 3.6x |
+
+### Rust NIF Engine (barbershop)
+
+| Stop tick | Events | Events/sec |
+|-----------|--------|-----------|
+| 100K | 35K | 5.3M |
+| 1M | 344K | 5.5M |
+| 10M | 3.4M | 9.2M |
+
+### Rust Factory (10 stages x 4 machines)
+
+| Stop tick | Events | Events/sec | Parts |
+|-----------|--------|-----------|-------|
+| 100K | 750K | 8.3M | 17,862 |
+| 1M | 7.4M | 9.0M | 176,580 |
+| 10M | 74M | 8.9M | 1,762,873 |
+
+### DSL Complex (electronics: split+decide+combine+batch)
+
+645K events/sec — 11 DSL verbs composing in one model.
 
 ```bash
-mix run benchmark/phold_bench.exs
-
-Engine vs GenServer — PHOLD A/B Test
-============================================================
-Cores: 88
-
-LPs     Stop  Events      Engine(ms)  GS(ms)      Eng E/s       GS E/s        Speedup
---------------------------------------------------------------------------------
-100     10.0  17565       61          485         287950        36216         8.0x
-1000    10.0  175940      1404        3746        125313        46967         2.7x
-10000   10.0  1758030     18293       41818       96103         42040         2.3x
-100     100.0 161723      633         2147        255486        75325         3.4x
-1000    100.0 1614913     12375       19340       130498        83501         1.6x
-10000   100.0 16156886    93348       381351      173082        42367         4.1x
-
+# Run benchmarks yourself:
+mix run benchmark/phold_bench.exs           # PHOLD sweep
+mix run benchmark/engine_vs_genserver.exs   # Engine vs GenServer A/B
+mix run benchmark/ets_ab.exs                # ETS vs Map A/B
+mix run benchmark/full_bench.exs            # Comprehensive (15 min)
+mix run benchmark/full_bench.exs -- quick   # Quick smoke (60s)
+mix run benchmark/dsl_complexity_bench.exs  # DSL verb complexity impact
 ```
 
 

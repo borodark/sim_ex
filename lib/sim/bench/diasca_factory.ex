@@ -24,13 +24,14 @@ defmodule Sim.Bench.DiascaFactory do
   def init(config) do
     seed = config[:seed] || :erlang.phash2(config.id)
 
-    {:ok, %__MODULE__{
-      id: config.id,
-      capacity: config[:capacity] || 1,
-      next_stage: config[:next_stage],
-      service_mean: config[:service_mean] || 1.0,
-      rand_state: :rand.seed(:exsss, {seed, seed * 7 + 1, seed * 13 + 3})
-    }}
+    {:ok,
+     %__MODULE__{
+       id: config.id,
+       capacity: config[:capacity] || 1,
+       next_stage: config[:next_stage],
+       service_mean: config[:service_mean] || 1.0,
+       rand_state: :rand.seed(:exsss, {seed, seed * 7 + 1, seed * 13 + 3})
+     }}
   end
 
   @impl true
@@ -40,10 +41,11 @@ defmodule Sim.Bench.DiascaFactory do
     if state.busy < state.capacity do
       {service_ticks, rs} = sample_service(state)
 
-      state = %{state |
-        busy: state.busy + 1,
-        rand_state: rs,
-        total_wait: state.total_wait + max(0, tick - enqueue_tick)
+      state = %{
+        state
+        | busy: state.busy + 1,
+          rand_state: rs,
+          total_wait: state.total_wait + max(0, tick - enqueue_tick)
       }
 
       {:ok, state, [{:delay, service_ticks, state.id, {:depart, job_id}}]}
@@ -68,11 +70,7 @@ defmodule Sim.Bench.DiascaFactory do
         wait = max(0, tick - enqueue_tick)
         {service_ticks, rs} = sample_service(state)
 
-        state = %{state |
-          queue: queue,
-          rand_state: rs,
-          total_wait: state.total_wait + wait
-        }
+        state = %{state | queue: queue, rand_state: rs, total_wait: state.total_wait + wait}
 
         {:ok, state, forward ++ [{:delay, service_ticks, state.id, {:depart, next_job}}]}
 
@@ -84,6 +82,7 @@ defmodule Sim.Bench.DiascaFactory do
   @impl true
   def statistics(state) do
     n = state.departures
+
     %{
       arrivals: state.arrivals,
       departures: n,
@@ -118,13 +117,14 @@ defmodule Sim.Bench.DiascaFactory do
         id = :"s#{s}_m#{m}"
         next_lb = if s < num_stages - 1, do: :"lb_#{s + 1}", else: nil
 
-        {id, __MODULE__, %{
-          id: id,
-          capacity: 1,
-          next_stage: next_lb,
-          service_mean: service_mean,
-          seed: seed + s * 1000 + m
-        }}
+        {id, __MODULE__,
+         %{
+           id: id,
+           capacity: 1,
+           next_stage: next_lb,
+           service_mean: service_mean,
+           seed: seed + s * 1000 + m
+         }}
       end
 
     # Load balancers — round-robin to machines in their stage
@@ -137,7 +137,8 @@ defmodule Sim.Bench.DiascaFactory do
 
     # Source — generates arrivals every N ticks to first load balancer
     source = {
-      :source, Sim.Bench.DiascaSource,
+      :source,
+      Sim.Bench.DiascaSource,
       %{id: :source, target: :lb_0, arrival_every: arrival_ticks, seed: seed + 99_999}
     }
 
@@ -166,8 +167,7 @@ defmodule Sim.Bench.LoadBalancer do
     target = elem(state.targets, state.index)
     next_idx = rem(state.index + 1, tuple_size(state.targets))
 
-    {:ok,
-     %{state | index: next_idx, forwarded: state.forwarded + 1},
+    {:ok, %{state | index: next_idx, forwarded: state.forwarded + 1},
      [{:same_tick, target, {:arrive, job_id, enqueue_tick}}]}
   end
 
@@ -184,13 +184,15 @@ defmodule Sim.Bench.DiascaSource do
   @impl true
   def init(config) do
     seed = config[:seed] || 42
-    {:ok, %__MODULE__{
-      id: config.id,
-      target: config.target,
-      arrival_every: config[:arrival_every] || 1,
-      batch_size: config[:batch_size] || 10,
-      rand_state: :rand.seed(:exsss, {seed, seed * 7 + 1, seed * 13 + 3})
-    }}
+
+    {:ok,
+     %__MODULE__{
+       id: config.id,
+       target: config.target,
+       arrival_every: config[:arrival_every] || 1,
+       batch_size: config[:batch_size] || 10,
+       rand_state: :rand.seed(:exsss, {seed, seed * 7 + 1, seed * 13 + 3})
+     }}
   end
 
   @impl true
@@ -205,9 +207,7 @@ defmodule Sim.Bench.DiascaSource do
     # Schedule next generation
     next = {:delay, state.arrival_every, state.id, :generate}
 
-    {:ok,
-     %{state | count: state.count + state.batch_size},
-     [next | arrivals]}
+    {:ok, %{state | count: state.count + state.batch_size}, [next | arrivals]}
   end
 
   @impl true
