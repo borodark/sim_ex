@@ -217,6 +217,28 @@ def deps do
 end
 ```
 
+## The Book (in progress)
+
+*The Factory That Learns: A Practitioner's Guide to Bayesian Inference
+for Manufacturing* is being written around sim_ex and Les Quatre
+Probabileurs. First draft complete. Not yet published — early
+access planned for late 2026. Eight chapters, each an executable
+Livebook notebook:
+
+1. **Five Lines That Describe a Factory** — DSL, M/M/1 verification, a 200-machine packaging line
+2. **The Number You Don't Know** — 1,000 replications in 68 seconds, the analysis Averill Law called "rarely done"
+3. **The Chart That Thinks** — Bayesian SPC: 73% the process shifted, not "alarm"
+4. **When Will This Machine Fail?** — hierarchical Weibull, 20 component types, censored data
+5. **The Bearing Knows When It Will Die** — degradation curves on FEMTO run-to-failure data
+6. **A Hundred Engines, One Model** — fleet RUL on NASA C-MAPSS, partial pooling across 100 turbofans
+7. **The Simulation That Learns** — all four libraries connected, self-calibrating digital twin
+8. **What to Do Monday Morning** — ten steps from "I read this book" to "my factory is learning"
+
+The book is for manufacturing engineers, not Elixir developers.
+`seize :drill / hold exponential(8.0) / release :drill` reads
+like the routing sheet already taped to the machine. The posterior
+is the part that's new. The factory floor is the part that's familiar.
+
 ## Installation
 
 ```elixir
