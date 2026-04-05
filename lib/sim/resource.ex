@@ -32,7 +32,8 @@ defmodule Sim.Resource do
     departures: 0,
     busy_time: 0.0,
     wait_times: [],
-    last_event_time: 0.0
+    last_event_time: 0.0,
+    service_starts: %{}
   ]
 
   @impl true
@@ -63,7 +64,8 @@ defmodule Sim.Resource do
         state
         | busy: state.busy + 1,
           rand_state: rand_state,
-          wait_times: [0.0 | state.wait_times]
+          wait_times: [0.0 | state.wait_times],
+          service_starts: Map.put(state.service_starts, job, clock)
       }
 
       events = [{depart_time, state.id, {:depart, job}}]
@@ -75,8 +77,18 @@ defmodule Sim.Resource do
     end
   end
 
-  def handle_event({:depart, _job}, clock, state) do
-    state = %{state | departures: state.departures + 1, last_event_time: clock}
+  def handle_event({:depart, job}, clock, state) do
+    # Accumulate busy time for the departing job
+    {service_start, service_starts} = Map.pop(state.service_starts, job)
+    busy_addition = if service_start, do: clock - service_start, else: 0.0
+
+    state = %{
+      state
+      | departures: state.departures + 1,
+        last_event_time: clock,
+        busy_time: state.busy_time + busy_addition,
+        service_starts: service_starts
+    }
 
     case :queue.out(state.queue) do
       {{:value, {next_job, arrival_time}}, queue} ->
@@ -88,7 +100,8 @@ defmodule Sim.Resource do
           state
           | queue: queue,
             rand_state: rand_state,
-            wait_times: [wait | state.wait_times]
+            wait_times: [wait | state.wait_times],
+            service_starts: Map.put(state.service_starts, next_job, clock)
         }
 
         events = [{depart_time, state.id, {:depart, next_job}}]

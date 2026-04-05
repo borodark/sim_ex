@@ -16,10 +16,18 @@ mod atoms {
 
 #[derive(Clone, Debug)]
 enum Step {
-    Seize(usize),       // resource index
+    Seize(usize),              // resource index
     Hold(Distribution),
-    Release(usize),     // resource index
+    Release(usize),            // resource index
     Depart,
+    Label,                     // no-op jump target
+    Assign,                    // no-op (attrs not tracked in Rust)
+    Decide { prob: f64, target: usize },
+    DecideMulti(Vec<(f64, usize)>),  // cumulative prob, target step
+    Route(Distribution),       // travel delay (like Hold but no resource)
+    Batch(usize),              // accumulate N parts
+    Split(usize),              // 1 becomes N
+    Combine(usize),            // N become 1
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +94,7 @@ enum Payload {
     Grant(usize, u64),                   // resource_idx, job_id
     HoldComplete(u64),                   // job_id
     Release(u64),                        // job_id
+    Continue(u64),                       // job_id — resume after batch/split/combine
 }
 
 // ============================================================
@@ -95,11 +104,12 @@ enum Payload {
 struct ProcessEntity {
     steps: Vec<Step>,
     instances: HashMap<u64, ProcessInstance>,
+    batch_buffers: HashMap<usize, Vec<u64>>,     // step_idx -> parked job_ids
+    combine_buffers: HashMap<usize, Vec<u64>>,   // step_idx -> parked job_ids
     rng: Xoshiro256StarStar,
     completed: u64,
     total_wait: f64,
     total_hold: f64,
-    idx: usize,
 }
 
 struct ProcessInstance {
@@ -223,6 +233,10 @@ impl Engine {
                 }
                 self.advance_process(idx, job_id, tick, diasca);
             }
+            Payload::Continue(job_id) => {
+                // Resume a parked job (after batch/split/combine released it)
+                self.advance_process(idx, job_id, tick, diasca);
+            }
             _ => {}
         }
     }
@@ -271,6 +285,140 @@ impl Engine {
                     proc.completed += 1;
                     return;
                 }
+                Step::Label => {
+                    // No-op jump target — just advance
+                    self.processes[idx].instances.get_mut(&job_id).unwrap().step += 1;
+                    // loop continues
+                }
+                Step::Assign => {
+                    // No-op in Rust engine (attrs not tracked)
+                    self.processes[idx].instances.get_mut(&job_id).unwrap().step += 1;
+                    // loop continues
+                }
+                Step::Decide { prob, target } => {
+                    let u: f64 = self.processes[idx].rng.gen();
+                    if u < prob {
+                        self.processes[idx].instances.get_mut(&job_id).unwrap().step = target;
+                    } else {
+                        self.processes[idx].instances.get_mut(&job_id).unwrap().step += 1;
+                    }
+                    // loop continues (synchronous, no event)
+                }
+                Step::DecideMulti(ref routes) => {
+                    let u: f64 = self.processes[idx].rng.gen();
+                    let mut jumped = false;
+                    for &(cum_prob, target) in routes.iter() {
+                        if u < cum_prob {
+                            self.processes[idx].instances.get_mut(&job_id).unwrap().step = target;
+                            jumped = true;
+                            break;
+                        }
+                    }
+                    if !jumped {
+                        // Fallthrough: use last route target (handles floating-point rounding)
+                        if let Some(&(_, target)) = routes.last() {
+                            self.processes[idx].instances.get_mut(&job_id).unwrap().step = target;
+                        } else {
+                            self.processes[idx].instances.get_mut(&job_id).unwrap().step += 1;
+                        }
+                    }
+                    // loop continues
+                }
+                Step::Route(dist) => {
+                    // Travel delay — same as Hold mechanically
+                    let duration = dist.sample(&mut self.processes[idx].rng);
+                    let delay_ticks = (duration as u64).max(1);
+                    self.processes[idx].instances.get_mut(&job_id).unwrap().hold_start = tick;
+                    self.push_event(tick + delay_ticks, 0, Target::Process(idx),
+                        Payload::HoldComplete(job_id));
+                    return; // wait for hold complete
+                }
+                Step::Batch(count) => {
+                    let buffer = self.processes[idx].batch_buffers
+                        .entry(step_idx)
+                        .or_insert_with(Vec::new);
+                    buffer.push(job_id);
+
+                    if buffer.len() >= count {
+                        // Batch complete — drain buffer, advance all jobs
+                        let ready: Vec<u64> = self.processes[idx].batch_buffers
+                            .remove(&step_idx)
+                            .unwrap();
+
+                        // Advance all buffered jobs to step+1 and push Continue events
+                        for jid in &ready {
+                            if let Some(inst) = self.processes[idx].instances.get_mut(jid) {
+                                inst.step = step_idx + 1;
+                            }
+                        }
+
+                        // Push Continue events for all (including current job_id)
+                        for jid in ready {
+                            self.push_event(tick, diasca + 1, Target::Process(idx),
+                                Payload::Continue(jid));
+                        }
+                        return; // will resume via Continue events
+                    } else {
+                        // Not enough yet — park this job
+                        return;
+                    }
+                }
+                Step::Split(count) => {
+                    // Advance original to next step
+                    self.processes[idx].instances.get_mut(&job_id).unwrap().step = step_idx + 1;
+
+                    // Create N-1 clones
+                    let base_id = job_id * 1_000_000;
+                    for i in 1..count {
+                        let clone_id = base_id + i as u64;
+                        self.processes[idx].instances.insert(clone_id, ProcessInstance {
+                            step: step_idx + 1,
+                            arrival_tick: tick,
+                            hold_start: 0,
+                        });
+                        // Push Continue event for clone
+                        self.push_event(tick, diasca + 1, Target::Process(idx),
+                            Payload::Continue(clone_id));
+                    }
+
+                    // Push Continue for original too (so all resume via events)
+                    self.push_event(tick, diasca + 1, Target::Process(idx),
+                        Payload::Continue(job_id));
+                    return;
+                }
+                Step::Combine(count) => {
+                    let buffer = self.processes[idx].combine_buffers
+                        .entry(step_idx)
+                        .or_insert_with(Vec::new);
+                    buffer.push(job_id);
+
+                    if buffer.len() >= count {
+                        // Combine complete — first survives, rest consumed
+                        let ready: Vec<u64> = self.processes[idx].combine_buffers
+                            .remove(&step_idx)
+                            .unwrap();
+
+                        let survivor = ready[0];
+
+                        // Remove consumed instances
+                        for &cid in &ready[1..] {
+                            self.processes[idx].instances.remove(&cid);
+                        }
+
+                        // Advance survivor
+                        if let Some(inst) = self.processes[idx].instances.get_mut(&survivor) {
+                            inst.step = step_idx + 1;
+                        }
+
+                        // Resume survivor via Continue
+                        self.push_event(tick, diasca + 1, Target::Process(idx),
+                            Payload::Continue(survivor));
+                        return;
+                    } else {
+                        // Not enough yet — park
+                        return;
+                    }
+                }
             }
         }
     }
@@ -318,9 +466,12 @@ impl Engine {
 /// Run a DSL-defined simulation entirely in Rust.
 ///
 /// Args:
-///   process_steps: list of lists of {step_type, arg} tuples per process
-///     step_type: "seize", "hold", "release", "depart"
-///     arg: resource_index (int) for seize/release, {dist_type, param} for hold, 0 for depart
+///   process_steps: list of lists of {step_type, [args]} tuples per process
+///     step_type: "seize", "hold_exp", "hold_const", "hold_uniform",
+///                "release", "depart", "label", "assign",
+///                "decide", "decide_multi",
+///                "route_exp", "route_const", "route_uniform",
+///                "batch", "split", "combine"
 ///   resource_caps: list of capacity per resource
 ///   arrival_means: list of mean interarrival time per process
 ///   stop_tick: simulation end tick
@@ -328,7 +479,7 @@ impl Engine {
 ///   batch_size: arrivals per tick per source
 #[rustler::nif(schedule = "DirtyCpu")]
 fn run_simulation(
-    process_steps: Vec<Vec<(String, f64, f64)>>,  // (type, arg1, arg2)
+    process_steps: Vec<Vec<(String, Vec<f64>)>>,
     resource_caps: Vec<u32>,
     arrival_means: Vec<f64>,
     stop_tick: u64,
@@ -345,14 +496,39 @@ fn run_simulation(
 )> {
     // Parse steps
     let processes: Vec<Vec<Step>> = process_steps.iter().map(|steps| {
-        steps.iter().map(|(stype, arg1, arg2)| {
+        steps.iter().map(|(stype, args)| {
             match stype.as_str() {
-                "seize" => Step::Seize(*arg1 as usize),
-                "hold_exp" => Step::Hold(Distribution::Exponential(*arg1)),
-                "hold_const" => Step::Hold(Distribution::Constant(*arg1)),
-                "hold_uniform" => Step::Hold(Distribution::Uniform(*arg1, *arg2)),
-                "release" => Step::Release(*arg1 as usize),
+                "seize" => Step::Seize(args[0] as usize),
+                "hold_exp" => Step::Hold(Distribution::Exponential(args[0])),
+                "hold_const" => Step::Hold(Distribution::Constant(args[0])),
+                "hold_uniform" => Step::Hold(Distribution::Uniform(args[0], args[1])),
+                "release" => Step::Release(args[0] as usize),
                 "depart" => Step::Depart,
+                "label" => Step::Label,
+                "assign" => Step::Assign,
+                "decide" => Step::Decide {
+                    prob: args[0],
+                    target: args[1] as usize,
+                },
+                "decide_multi" => {
+                    // args = [prob1, idx1, prob2, idx2, ...]
+                    // Convert to cumulative probabilities
+                    let mut routes = Vec::new();
+                    let mut cum = 0.0;
+                    let mut i = 0;
+                    while i + 1 < args.len() {
+                        cum += args[i];
+                        routes.push((cum, args[i + 1] as usize));
+                        i += 2;
+                    }
+                    Step::DecideMulti(routes)
+                }
+                "route_exp" => Step::Route(Distribution::Exponential(args[0])),
+                "route_const" => Step::Route(Distribution::Constant(args[0])),
+                "route_uniform" => Step::Route(Distribution::Uniform(args[0], args[1])),
+                "batch" => Step::Batch(args[0] as usize),
+                "split" => Step::Split(args[0] as usize),
+                "combine" => Step::Combine(args[0] as usize),
                 _ => Step::Depart,
             }
         }).collect()
@@ -368,11 +544,12 @@ fn run_simulation(
         ProcessEntity {
             steps: steps.clone(),
             instances: HashMap::new(),
+            batch_buffers: HashMap::new(),
+            combine_buffers: HashMap::new(),
             rng: Xoshiro256StarStar::seed_from_u64(seed + i as u64 * 1000),
             completed: 0,
             total_wait: 0.0,
             total_hold: 0.0,
-            idx: i,
         }
     }).collect();
 

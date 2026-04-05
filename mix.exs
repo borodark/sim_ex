@@ -58,7 +58,7 @@ defmodule Sim.MixProject do
         DSL: [Sim.DSL, Sim.DSL.Process, Sim.DSL.Resource],
         Analysis: [Sim.Statistics, Sim.Experiment, Sim.Warmup, Sim.TimeSeries, Sim.Validate]
       ],
-      source_ref: "v#{@version}"
+      source_ref: "main"
     ]
   end
 end

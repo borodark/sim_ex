@@ -9,6 +9,11 @@ defmodule Sim.Engine.Rust do
   Only works with DSL-style models (resources + process flows).
   For custom `Sim.Entity` modules, use the Elixir engines.
 
+  ## Supported Verbs
+
+  seize, hold, release, depart, label, assign, decide, decide_multi,
+  route, batch, split, combine.
+
   ## Usage
 
       Sim.run(
@@ -35,11 +40,13 @@ defmodule Sim.Engine.Rust do
     resource_caps =
       Enum.map(resources, fn r -> Map.get(r, :capacity, 1) end)
 
-    # Encode process steps → list of {type_string, arg1, arg2} tuples
+    # Encode process steps → list of {type_string, [float_args]} tuples
+    # Two-pass: first build label map, then encode with resolved targets
     process_steps =
       Enum.map(processes, fn proc ->
         steps = Map.get(proc, :steps, [])
-        Enum.map(steps, &encode_step/1)
+        label_map = build_label_map(steps)
+        Enum.map(steps, &encode_step(&1, label_map))
       end)
 
     # Encode arrival means
@@ -91,12 +98,57 @@ defmodule Sim.Engine.Rust do
      }}
   end
 
-  # --- Step encoding ---
+  # --- Label map construction (pass 1) ---
 
-  defp encode_step({:seize, res_idx}), do: {"seize", res_idx * 1.0, 0.0}
-  defp encode_step({:hold, {:exponential, mean}}), do: {"hold_exp", mean * 1.0, 0.0}
-  defp encode_step({:hold, {:constant, val}}), do: {"hold_const", val * 1.0, 0.0}
-  defp encode_step({:hold, {:uniform, {a, b}}}), do: {"hold_uniform", a * 1.0, b * 1.0}
-  defp encode_step({:release, res_idx}), do: {"release", res_idx * 1.0, 0.0}
-  defp encode_step(:depart), do: {"depart", 0.0, 0.0}
+  @doc false
+  def build_label_map(steps) do
+    # Walk flow steps (excluding :arrive), assign indices, collect labels
+    steps
+    |> Enum.reject(fn
+      {:arrive, _} -> true
+      _ -> false
+    end)
+    |> Enum.with_index()
+    |> Enum.reduce(%{}, fn
+      {{:label, name}, idx}, acc -> Map.put(acc, name, idx)
+      _, acc -> acc
+    end)
+  end
+
+  # --- Step encoding (pass 2) ---
+
+  defp encode_step({:seize, res_idx}, _label_map), do: {"seize", [res_idx * 1.0]}
+  defp encode_step({:hold, {:exponential, mean}}, _label_map), do: {"hold_exp", [mean * 1.0]}
+  defp encode_step({:hold, {:constant, val}}, _label_map), do: {"hold_const", [val * 1.0]}
+  defp encode_step({:hold, {:uniform, {a, b}}}, _label_map), do: {"hold_uniform", [a * 1.0, b * 1.0]}
+  defp encode_step({:release, res_idx}, _label_map), do: {"release", [res_idx * 1.0]}
+  defp encode_step(:depart, _label_map), do: {"depart", []}
+  defp encode_step({:depart, _}, _label_map), do: {"depart", []}
+
+  defp encode_step({:label, _name}, _label_map), do: {"label", []}
+  defp encode_step({:assign, _kv}, _label_map), do: {"assign", []}
+
+  defp encode_step({:decide, {prob, label_name}}, label_map) do
+    target_idx = Map.fetch!(label_map, label_name)
+    {"decide", [prob * 1.0, target_idx * 1.0]}
+  end
+
+  defp encode_step({:decide_multi, routes}, label_map) do
+    # Encode as flat pairs: [prob1, idx1, prob2, idx2, ...]
+    args =
+      Enum.flat_map(routes, fn {prob, label_name} ->
+        target_idx = Map.fetch!(label_map, label_name)
+        [prob * 1.0, target_idx * 1.0]
+      end)
+
+    {"decide_multi", args}
+  end
+
+  defp encode_step({:route, {:exponential, mean}}, _label_map), do: {"route_exp", [mean * 1.0]}
+  defp encode_step({:route, {:constant, val}}, _label_map), do: {"route_const", [val * 1.0]}
+  defp encode_step({:route, {:uniform, {a, b}}}, _label_map), do: {"route_uniform", [a * 1.0, b * 1.0]}
+
+  defp encode_step({:batch, count}, _label_map), do: {"batch", [count * 1.0]}
+  defp encode_step({:split, count}, _label_map), do: {"split", [count * 1.0]}
+  defp encode_step({:combine, count}, _label_map), do: {"combine", [count * 1.0]}
 end

@@ -12,6 +12,18 @@ defmodule Sim.DSL.Resource do
   When capacity decreases (shift ends), busy count can temporarily exceed
   capacity — jobs in progress finish, but no new grants until busy drops
   below the new limit.
+
+  ## Preemptive Resources
+
+      resource :machine, capacity: 1, preemptive: true
+
+  When `preemptive: true`, higher-priority entities can eject current
+  holders. Priority is numeric (lower = higher priority). The ejected
+  entity receives a `{:preempted, resource_name, job_id, remaining_service}`
+  message and re-enters the queue with its remaining service time.
+
+  Queue ordering uses `{priority, queue_seq}` via `:gb_trees` to ensure
+  FIFO within the same priority level.
   """
 
   @behaviour Sim.Entity
@@ -21,10 +33,15 @@ defmodule Sim.DSL.Resource do
     :rand_state,
     :schedule,
     capacity: 1,
+    preemptive: false,
     busy: 0,
     queue: :queue.new(),
+    # %{job_id => {requestor_id, priority, grant_time}} — preemptive mode only
+    holders: %{},
     grants: 0,
     releases: 0,
+    preemptions: 0,
+    queue_seq: 0,
     last_capacity_check: 0
   ]
 
@@ -33,62 +50,88 @@ defmodule Sim.DSL.Resource do
   @impl true
   def init(%{schedule: schedule} = config) when is_list(schedule) do
     seed = config[:seed] || :erlang.phash2(config.id)
+    preemptive = config[:preemptive] || false
 
-    {:ok,
-     %__MODULE__{
-       id: config.id,
-       capacity: schedule_capacity(schedule, 0),
-       schedule: schedule,
-       rand_state: :rand.seed(:exsss, {seed, seed * 7 + 1, seed * 13 + 3})
-     }}
+    state = %__MODULE__{
+      id: config.id,
+      capacity: schedule_capacity(schedule, 0),
+      schedule: schedule,
+      preemptive: preemptive,
+      rand_state: :rand.seed(:exsss, {seed, seed * 7 + 1, seed * 13 + 3})
+    }
+
+    state = if preemptive, do: %{state | queue: :gb_trees.empty()}, else: state
+    {:ok, state}
   end
 
   def init(config) do
     seed = config[:seed] || :erlang.phash2(config.id)
+    preemptive = config[:preemptive] || false
 
-    {:ok,
-     %__MODULE__{
-       id: config.id,
-       capacity: config[:capacity] || 1,
-       rand_state: :rand.seed(:exsss, {seed, seed * 7 + 1, seed * 13 + 3})
-     }}
+    state = %__MODULE__{
+      id: config.id,
+      capacity: config[:capacity] || 1,
+      preemptive: preemptive,
+      rand_state: :rand.seed(:exsss, {seed, seed * 7 + 1, seed * 13 + 3})
+    }
+
+    state = if preemptive, do: %{state | queue: :gb_trees.empty()}, else: state
+    {:ok, state}
   end
 
-  # --- Seize: capacity available → grant immediately ---
+  # ============================================================
+  # Non-preemptive: 3-tuple seize_request (backward compat)
+  # ============================================================
 
   @impl true
   def handle_event(
         {:seize_request, job_id, requestor_id},
         clock,
-        %{busy: busy, capacity: cap} = state
-      )
-      when busy < cap do
-    state = maybe_update_capacity(state, clock)
-
-    if state.busy < state.capacity do
-      grant_event = make_event(clock, requestor_id, {:grant, state.id, job_id})
-      {:ok, %{state | busy: state.busy + 1, grants: state.grants + 1}, [grant_event]}
-    else
-      # Capacity changed between check — queue instead
-      {:ok, %{state | queue: :queue.in({job_id, requestor_id}, state.queue)}, []}
-    end
+        %{preemptive: false} = state
+      ) do
+    handle_seize_non_preemptive(job_id, requestor_id, clock, state)
   end
 
-  # --- Seize: at capacity → queue ---
-
-  def handle_event({:seize_request, job_id, requestor_id}, clock, state) do
-    state = maybe_update_capacity(state, clock)
-
-    if state.busy < state.capacity do
-      # Capacity increased via schedule — grant after all
-      grant_event = make_event(clock, requestor_id, {:grant, state.id, job_id})
-      {:ok, %{state | busy: state.busy + 1, grants: state.grants + 1}, [grant_event]}
-    else
-      {:ok, %{state | queue: :queue.in({job_id, requestor_id}, state.queue)}, []}
-    end
+  # 4-tuple on a non-preemptive resource: ignore priority, treat as non-preemptive
+  def handle_event(
+        {:seize_request, job_id, requestor_id, _priority},
+        clock,
+        %{preemptive: false} = state
+      ) do
+    handle_seize_non_preemptive(job_id, requestor_id, clock, state)
   end
 
-  # --- Release: free capacity, grant to next waiter ---
+  # ============================================================
+  # Preemptive: 4-tuple seize_request
+  # ============================================================
+
+  def handle_event(
+        {:seize_request, job_id, requestor_id, priority},
+        clock,
+        %{preemptive: true} = state
+      ) do
+    handle_seize_preemptive(job_id, requestor_id, priority, clock, state)
+  end
+
+  # 3-tuple on preemptive resource: default priority 999
+  def handle_event(
+        {:seize_request, job_id, requestor_id},
+        clock,
+        %{preemptive: true} = state
+      ) do
+    handle_seize_preemptive(job_id, requestor_id, 999, clock, state)
+  end
+
+  # ============================================================
+  # Release (same for both modes)
+  # ============================================================
+
+  def handle_event({:release, job_id}, clock, %{preemptive: true} = state) do
+    state = %{state | releases: state.releases + 1, busy: max(state.busy - 1, 0)}
+    state = %{state | holders: Map.delete(state.holders, job_id)}
+    state = maybe_update_capacity(state, clock)
+    grant_from_queue_preemptive(state, clock)
+  end
 
   def handle_event({:release, _job_id}, clock, state) do
     state = %{state | releases: state.releases + 1, busy: max(state.busy - 1, 0)}
@@ -103,6 +146,17 @@ defmodule Sim.DSL.Resource do
   # --- Statistics ---
 
   @impl true
+  def statistics(%__MODULE__{preemptive: true} = state) do
+    %{
+      grants: state.grants,
+      releases: state.releases,
+      queue_length: :gb_trees.size(state.queue),
+      current_capacity: state.capacity,
+      busy: state.busy,
+      preemptions: state.preemptions
+    }
+  end
+
   def statistics(%__MODULE__{} = state) do
     %{
       grants: state.grants,
@@ -113,7 +167,101 @@ defmodule Sim.DSL.Resource do
     }
   end
 
-  # --- Private: grant from queue ---
+  # ============================================================
+  # Private: non-preemptive seize (original logic)
+  # ============================================================
+
+  defp handle_seize_non_preemptive(job_id, requestor_id, clock, state) do
+    state = maybe_update_capacity(state, clock)
+
+    if state.busy < state.capacity do
+      grant_event = make_event(clock, requestor_id, {:grant, state.id, job_id})
+      {:ok, %{state | busy: state.busy + 1, grants: state.grants + 1}, [grant_event]}
+    else
+      {:ok, %{state | queue: :queue.in({job_id, requestor_id}, state.queue)}, []}
+    end
+  end
+
+  # ============================================================
+  # Private: preemptive seize
+  # ============================================================
+
+  defp handle_seize_preemptive(job_id, requestor_id, priority, clock, state) do
+    state = maybe_update_capacity(state, clock)
+
+    if state.busy < state.capacity do
+      # Capacity available — grant immediately
+      grant_event = make_event(clock, requestor_id, {:grant, state.id, job_id})
+      holders = Map.put(state.holders, job_id, {requestor_id, priority, clock_to_number(clock)})
+
+      {:ok,
+       %{state | busy: state.busy + 1, grants: state.grants + 1, holders: holders},
+       [grant_event]}
+    else
+      # At capacity — check if incoming priority beats worst holder
+      case find_worst_holder(state.holders) do
+        {worst_job_id, {worst_requestor_id, worst_priority, _grant_time}}
+        when priority < worst_priority ->
+          # Preempt: eject worst holder, grant to incoming
+          now = clock_to_number(clock)
+          remaining = compute_remaining(state.holders, worst_job_id, now)
+
+          # Remove worst holder
+          holders = Map.delete(state.holders, worst_job_id)
+
+          # Add incoming as new holder
+          holders = Map.put(holders, job_id, {requestor_id, priority, now})
+
+          # Send preempted event to the ejected entity's process
+          preempted_event =
+            make_event(
+              clock,
+              worst_requestor_id,
+              {:preempted, state.id, worst_job_id, remaining}
+            )
+
+          # Grant to incoming
+          grant_event = make_event(clock, requestor_id, {:grant, state.id, job_id})
+
+          # Re-queue the ejected entity with its remaining service time
+          seq = state.queue_seq
+          queue = :gb_trees.insert({worst_priority, seq}, {worst_job_id, worst_requestor_id, remaining}, state.queue)
+
+          {:ok,
+           %{state |
+             holders: holders,
+             grants: state.grants + 1,
+             preemptions: state.preemptions + 1,
+             queue: queue,
+             queue_seq: seq + 1
+           },
+           [grant_event, preempted_event]}
+
+        _ ->
+          # Incoming does NOT beat worst holder — enqueue
+          seq = state.queue_seq
+          queue = :gb_trees.insert({priority, seq}, {job_id, requestor_id, nil}, state.queue)
+          {:ok, %{state | queue: queue, queue_seq: seq + 1}, []}
+      end
+    end
+  end
+
+  # Find the holder with worst (highest numeric) priority
+  defp find_worst_holder(holders) when map_size(holders) == 0, do: nil
+
+  defp find_worst_holder(holders) do
+    Enum.max_by(holders, fn {_job_id, {_req_id, priority, _gt}} -> priority end)
+  end
+
+  # Compute remaining service time for a preempted holder.
+  # We don't know the original hold duration from the resource side,
+  # so remaining is nil here — the process tracks its own remaining time
+  # via hold_gen and the preempted event.
+  defp compute_remaining(_holders, _job_id, _now), do: nil
+
+  # ============================================================
+  # Private: grant from queue (non-preemptive)
+  # ============================================================
 
   defp grant_from_queue(%{busy: busy, capacity: cap} = state, clock) when busy < cap do
     case :queue.out(state.queue) do
@@ -130,6 +278,30 @@ defmodule Sim.DSL.Resource do
   end
 
   defp grant_from_queue(state, _clock), do: {:ok, state, []}
+
+  # ============================================================
+  # Private: grant from queue (preemptive — :gb_trees)
+  # ============================================================
+
+  defp grant_from_queue_preemptive(%{busy: busy, capacity: cap} = state, clock) when busy < cap do
+    case :gb_trees.is_empty(state.queue) do
+      true ->
+        {:ok, state, []}
+
+      false ->
+        {{priority, _seq}, {job_id, requestor_id, _remaining}, queue} =
+          :gb_trees.take_smallest(state.queue)
+
+        grant = make_event(clock, requestor_id, {:grant, state.id, job_id})
+        holders = Map.put(state.holders, job_id, {requestor_id, priority, clock_to_number(clock)})
+
+        state = %{state | queue: queue, busy: state.busy + 1, grants: state.grants + 1, holders: holders}
+        {:ok, state, more_grants} = grant_from_queue_preemptive(state, clock)
+        {:ok, state, [grant | more_grants]}
+    end
+  end
+
+  defp grant_from_queue_preemptive(state, _clock), do: {:ok, state, []}
 
   # --- Private: schedule capacity ---
 

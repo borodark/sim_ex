@@ -41,7 +41,13 @@ defmodule Sim do
   - `Sim.Experiment` — replications, CRN, paired comparison
   - `Sim.PHOLD` — standard DES benchmark
 
-  ## Integration with Les Trois Chambrées
+  ## Analysis
+
+  - `Sim.Warmup` — Welch's method warm-up detection and truncation
+  - `Sim.TimeSeries` — per-window utilization, throughput, queue length
+  - `Sim.Validate` — compare simulation output to historical data (KS test)
+
+  ## Integration with Les Quatre Probabileurs
 
   - **eXMC**: fit input distribution posteriors, propagate uncertainty
   - **smc_ex**: self-calibrating digital twin via O-SMC²

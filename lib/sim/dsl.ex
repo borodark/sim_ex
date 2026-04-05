@@ -136,6 +136,7 @@ defmodule Sim.DSL do
      end)}
   end
 
+  defp parse_step({:seize, _, [name, opts]}) when is_list(opts), do: {:seize, {name, opts}}
   defp parse_step({:seize, _, [name]}), do: {:seize, name}
   defp parse_step({:hold, _, [dist]}), do: {:hold, eval_dist(dist)}
   defp parse_step({:release, _, [name]}), do: {:release, name}
@@ -257,6 +258,7 @@ defmodule Sim.DSL do
     resource_entries =
       Enum.map(resources, fn {name, opts} ->
         schedule = opts[:schedule]
+        preemptive = opts[:preemptive] || false
 
         config =
           if schedule do
@@ -264,6 +266,7 @@ defmodule Sim.DSL do
               %{
                 id: unquote(name),
                 schedule: unquote(Macro.escape(schedule)),
+                preemptive: unquote(preemptive),
                 seed: seed + :erlang.phash2(unquote(name))
               }
             end
@@ -272,6 +275,7 @@ defmodule Sim.DSL do
               %{
                 id: unquote(name),
                 capacity: unquote(opts[:capacity] || 1),
+                preemptive: unquote(preemptive),
                 seed: seed + :erlang.phash2(unquote(name))
               }
             end

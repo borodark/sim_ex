@@ -65,7 +65,11 @@ defmodule Sim.DSL.Process do
             step: 0,
             arrival_time: clock_to_float(clock, arrival_time),
             hold_start: nil,
-            attrs: %{}
+            hold_end: nil,
+            attrs: %{},
+            hold_gen: 0,
+            remaining_hold: nil,
+            on_preempt: nil
           }
 
           state = %{state | instances: Map.put(state.instances, job_id, instance)}
@@ -92,6 +96,32 @@ defmodule Sim.DSL.Process do
           end
         end
 
+        # Generation-tagged hold_complete (preemptive mode)
+        def handle_event({:hold_complete, job_id, gen}, clock, state) do
+          case Map.get(state.instances, job_id) do
+            nil ->
+              {:ok, state, []}
+
+            instance ->
+              if gen != instance.hold_gen do
+                # Stale event from a preempted hold — silently discard
+                {:ok, state, []}
+              else
+                hold_duration = clock_to_float(clock, 0) - (instance.hold_start || 0.0)
+                instance = %{instance | step: instance.step + 1}
+
+                state = %{
+                  state
+                  | instances: Map.put(state.instances, job_id, instance),
+                    total_hold: state.total_hold + hold_duration
+                }
+
+                advance_step(job_id, clock, state)
+              end
+          end
+        end
+
+        # Legacy 2-tuple hold_complete (backward compat, non-preemptive)
         def handle_event({:hold_complete, job_id}, clock, state) do
           case Map.get(state.instances, job_id) do
             nil ->
@@ -107,6 +137,43 @@ defmodule Sim.DSL.Process do
                   total_hold: state.total_hold + hold_duration
               }
 
+              advance_step(job_id, clock, state)
+          end
+        end
+
+        # Preempted handler: entity was ejected from a resource
+        def handle_event({:preempted, resource_name, job_id, _remaining}, clock, state) do
+          case Map.get(state.instances, job_id) do
+            nil ->
+              {:ok, state, []}
+
+            instance ->
+              # Increment hold_gen to invalidate pending hold_complete
+              new_gen = instance.hold_gen + 1
+
+              # Calculate remaining hold time from hold_end
+              now = clock_to_float(clock, 0)
+              remaining_time =
+                if instance.hold_end do
+                  max(instance.hold_end - now, 0.001)
+                else
+                  0.001
+                end
+
+              # The instance is currently at the :hold step (grant advanced past
+              # seize, advance_step dispatched hold). Move step back to the seize
+              # step so advance_step will re-issue the seize_request.
+              seize_step = instance.step - 1
+
+              instance = %{instance |
+                hold_gen: new_gen,
+                remaining_hold: remaining_time,
+                step: seize_step
+              }
+
+              state = %{state | instances: Map.put(state.instances, job_id, instance)}
+
+              # Re-issue seize_request to go back in queue
               advance_step(job_id, clock, state)
           end
         end
@@ -140,6 +207,17 @@ defmodule Sim.DSL.Process do
 
               {:ok, state, []}
 
+            {{:seize, {resource_name, opts}}, _idx} ->
+              # Seize with options (priority, on_preempt)
+              priority = resolve_priority(opts[:priority], instance)
+              instance = %{instance | on_preempt: opts[:on_preempt]}
+              state = %{state | instances: Map.put(state.instances, job_id, instance)}
+
+              event =
+                make_event(clock, state.mode, resource_name, {:seize_request, job_id, state.id, priority})
+
+              {:ok, state, [event]}
+
             {{:seize, resource_name}, _idx} ->
               event =
                 make_event(clock, state.mode, resource_name, {:seize_request, job_id, state.id})
@@ -155,8 +233,24 @@ defmodule Sim.DSL.Process do
               {:ok, state, [event | more_events]}
 
             {{:hold, dist}, _idx} ->
-              {duration, rand_state} = sample_dist(dist, state.rand_state)
-              instance = %{instance | hold_start: clock_to_float(clock, 0)}
+              # If remaining_hold is set (preempted entity re-granted),
+              # use remaining time directly. Otherwise sample fresh.
+              {duration, rand_state} =
+                if instance.remaining_hold != nil do
+                  # Preempted re-entry: use stored remaining time.
+                  # Do NOT consume RNG — preserves determinism for
+                  # other entities.
+                  {instance.remaining_hold, state.rand_state}
+                else
+                  sample_dist(dist, state.rand_state)
+                end
+
+              now = clock_to_float(clock, 0)
+              instance = %{instance |
+                hold_start: now,
+                hold_end: now + duration,
+                remaining_hold: nil
+              }
 
               state = %{
                 state
@@ -164,7 +258,7 @@ defmodule Sim.DSL.Process do
                   rand_state: rand_state
               }
 
-              handle_hold(job_id, duration, clock, state)
+              handle_hold_gen(job_id, duration, instance.hold_gen, clock, state)
 
             {{:depart, _}, _idx} ->
               state = %{
@@ -317,6 +411,27 @@ defmodule Sim.DSL.Process do
           end
         end
 
+        # Resolve priority: atom → look up in attrs, integer → use directly
+        defp resolve_priority(nil, _instance), do: 999
+        defp resolve_priority(p, _instance) when is_integer(p), do: p
+        defp resolve_priority(p, instance) when is_atom(p), do: Map.get(instance.attrs, p, 999)
+
+        # Generation-tagged hold (for preemptive resources)
+        defp handle_hold_gen(job_id, duration, gen, clock, state) do
+          event =
+            case state.mode do
+              :diasca ->
+                ticks = max(1, round(duration))
+                {:delay, ticks, state.id, {:hold_complete, job_id, gen}}
+
+              _ ->
+                {clock_to_float(clock, 0) + duration, state.id, {:hold_complete, job_id, gen}}
+            end
+
+          {:ok, state, [event]}
+        end
+
+        # Legacy hold (no generation tag, for routes and non-preemptive)
         defp handle_hold(job_id, duration, clock, state) do
           event =
             case state.mode do
