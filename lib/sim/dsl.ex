@@ -166,6 +166,10 @@ defmodule Sim.DSL do
   # combine N — N parts merge into 1 (assembly)
   defp parse_step({:combine, _, [count]}) when is_integer(count), do: {:combine, count}
 
+  # assign key, value — set an attribute on the current entity instance
+  defp parse_step({:assign, _, [key, value]}) when is_atom(key), do: {:assign, {key, value}}
+  defp parse_step({:assign, _, [key, {:fn, _, _} = fun_ast]}), do: {:assign, {key, fun_ast}}
+
   # label :name — named jump target for decide
   defp parse_step({:label, _, [name]}) when is_atom(name), do: {:label, name}
   defp parse_step({{:label, name}, _, _}) when is_atom(name), do: {:label, name}

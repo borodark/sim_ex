@@ -64,7 +64,8 @@ defmodule Sim.DSL.Process do
           instance = %{
             step: 0,
             arrival_time: clock_to_float(clock, arrival_time),
-            hold_start: nil
+            hold_start: nil,
+            attrs: %{}
           }
 
           state = %{state | instances: Map.put(state.instances, job_id, instance)}
@@ -234,6 +235,13 @@ defmodule Sim.DSL.Process do
                 state = %{state | batch_buffer: Map.put(state.batch_buffer, step_key, buffer)}
                 {:ok, state, []}
               end
+
+            {{:assign, {key, value}}, _idx} ->
+              # Set attribute on this instance
+              attrs = Map.put(instance.attrs, key, value)
+              instance = %{instance | step: instance.step + 1, attrs: attrs}
+              state = %{state | instances: Map.put(state.instances, job_id, instance)}
+              advance_step(job_id, clock, state)
 
             {{:label, _name}, _idx} ->
               # Labels are no-ops — just advance to next step

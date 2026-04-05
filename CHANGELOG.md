@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1 (2026-04-05)
+
+Production analysis features and SimPy head-to-head benchmark.
+
+- `assign` verb — set attributes on entity instances mid-flow
+- `Sim.Warmup` — Welch's method warm-up detection and truncation
+- `Sim.TimeSeries` — per-window statistics (utilization, throughput, queue length by shift)
+- `Sim.Validate` — compare simulation to historical data (KS test, error metrics, verdict)
+- SimPy head-to-head benchmark: 3.7x Elixir, 24x Rust on batch replications
+- 77 tests, 0 failures
+
 ## 0.1.0 (2026-04-01)
 
 Initial release.

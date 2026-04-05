@@ -82,7 +82,7 @@ Barbershop.run(stop_time: 10_000.0, seed: 42)
 No magic runtime. `mix compile` generates standard `Sim.Entity` modules.
 Works in engine, ETS, tick-diasca, parallel, and Rust modes.
 
-### DSL Verbs — Arena Core Coverage
+### DSL Verbs — 12 Arena-Style Verbs
 
 | Verb | Arena Equivalent | Description |
 |------|-----------------|-------------|
@@ -97,6 +97,7 @@ Works in engine, ETS, tick-diasca, parallel, and Rust modes.
 | `batch N` | BATCH | Accumulate N parts |
 | `split N` | SEPARATE | One part becomes N |
 | `combine N` | COMBINE / MATCH | N parts merge into one |
+| `assign :key, value` | ASSIGN | Set attribute on entity instance |
 | `label :name` | STATION | Jump target for decide |
 | `depart` | DISPOSE | Exit, collect statistics |
 | `resource :r, capacity: N` | RESOURCE | Fixed capacity |

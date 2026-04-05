@@ -13,8 +13,8 @@ defmodule Sim.MixProject do
       deps: deps(),
       description:
         "Discrete-event simulation engine for the BEAM with GPSS/Arena-style DSL. " <>
-          "11 verbs: seize, hold, release, decide, batch, split, combine, route, label, depart. " <>
-          "Rust NIF engine at 15M events/sec. Zero runtime dependencies.",
+          "12 verbs: seize, hold, release, decide, batch, split, combine, route, label, assign, depart. " <>
+          "Rust NIF engine at 9M events/sec. Zero runtime dependencies.",
       package: package(),
       docs: docs(),
       source_url: @source_url,
@@ -56,7 +56,7 @@ defmodule Sim.MixProject do
         Core: [Sim, Sim.Engine, Sim.Engine.Diasca, Sim.Clock, Sim.Calendar, Sim.Topology],
         Entities: [Sim.Entity, Sim.EntityManager, Sim.Source, Sim.Resource, Sim.PHOLD],
         DSL: [Sim.DSL, Sim.DSL.Process, Sim.DSL.Resource],
-        Analysis: [Sim.Statistics, Sim.Experiment]
+        Analysis: [Sim.Statistics, Sim.Experiment, Sim.Warmup, Sim.TimeSeries, Sim.Validate]
       ],
       source_ref: "v#{@version}"
     ]

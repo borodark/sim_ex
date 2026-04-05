@@ -52,18 +52,18 @@ something you do before the meeting starts.
 Before we propagate uncertainty, we need to create it honestly. A time
 study that produces useful standard errors requires:
 
-- **Sample size:** SE = mean / sqrt(n) for exponential distributions.
+* **Sample size:** SE = mean / sqrt(n) for exponential distributions.
   n > 100 for SE < 10% of mean. Our 200 observations give SE ~ 7%.
-- **Independence:** Collect across shifts, not within one hour.
+* **Independence:** Collect across shifts, not within one hour.
   Consecutive cycle times are often correlated (operator speed, warmup).
-- **Stationarity:** The process shouldn't be drifting during collection.
+* **Stationarity:** The process shouldn't be drifting during collection.
 
 | Desired precision | n required | Example: mean=5.2 |
-|---|---|---|
-| SE < 20% of mean | 25 | SE ~ 1.04 |
-| SE < 10% of mean | 100 | SE ~ 0.52 |
-| SE < 7% of mean | 200 | SE ~ 0.35 |
-| SE < 5% of mean | 400 | SE ~ 0.26 |
+| ----------------- | ---------- | ----------------- |
+| SE < 20% of mean  | 25         | SE ~ 1.04         |
+| SE < 10% of mean  | 100        | SE ~ 0.52         |
+| SE < 7% of mean   | 200        | SE ~ 0.35         |
+| SE < 5% of mean   | 400        | SE ~ 0.26         |
 
 ## The Factory
 
@@ -415,9 +415,9 @@ you've lost the cost of the machine in foregone revenue.
 The point estimate gives you one answer: buy or don't. The posterior
 gives you the probability of each type of error:
 
-- P(payback < 24 months) = the probability the investment pays off quickly
-- P(improvement < 2 vials) = the probability it's a waste
-- P(improvement > 10 vials) = the probability it's a home run
+* P(payback < 24 months) = the probability the investment pays off quickly
+* P(improvement < 2 vials) = the probability it's a waste
+* P(improvement > 10 vials) = the probability it's a home run
 
 These probabilities come directly from the 1,000-replication distribution.
 No additional modeling needed. No additional cost. Just count.
