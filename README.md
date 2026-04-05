@@ -165,29 +165,37 @@ Sim.run(
 
 | LPs | Events | Engine E/s | GenServer E/s | Speedup |
 |-----|--------|-----------|--------------|---------|
-| 100 | 162K | 533K | 88K | 6.1x |
-| 1,000 | 1.6M | 159K | 57K | 2.8x |
-| 10,000 | 16.2M | 140K | 38K | 3.6x |
+| 100 | 162K | 270K | 70K | 3.8x |
+| 1,000 | 1.6M | 146K | 63K | 2.3x |
+| 10,000 | 1.8M | 88K | 40K | 2.2x |
 
 ### Rust NIF Engine (barbershop)
 
 | Stop tick | Events | Events/sec |
 |-----------|--------|-----------|
-| 100K | 35K | 5.3M |
-| 1M | 344K | 5.5M |
-| 10M | 3.4M | 9.2M |
+| 50K | 81K | 3.1M |
+| 500K | 804K | 6.4M |
 
-### Rust Factory (10 stages x 4 machines)
+### DSL Complex (12 verbs, all composing)
 
-| Stop tick | Events | Events/sec | Parts |
-|-----------|--------|-----------|-------|
-| 100K | 750K | 8.3M | 17,862 |
-| 1M | 7.4M | 9.0M | 176,580 |
-| 10M | 74M | 8.9M | 1,762,873 |
+| Model | Events/sec | Verbs used |
+|-------|-----------|------------|
+| Barbershop | 687K | 5 (seize, hold, release, arrive, depart) |
+| Job Shop | 761K | 8 (+ route, schedule) |
+| Rework Line | 911K | + decide, label |
+| Electronics | 739K | + split(4), combine(4), batch(10) |
+| Full Fab | 671K | 12 verbs, 8 resources |
 
-### DSL Complex (electronics: split+decide+combine+batch)
+Complexity tax: 1.6x between simplest and most complex.
 
-645K events/sec — 11 DSL verbs composing in one model.
+### sim_ex vs SimPy (head-to-head, 2026-04-05)
+
+| Model | SimPy | sim_ex Elixir | sim_ex Rust |
+|-------|-------|--------------|-------------|
+| Barbershop 200K | 168ms | 89ms (**1.9x**) | 16ms (**10.5x**) |
+| Job Shop 200K | 3,298ms | 1,879ms (**1.8x**) | — |
+| Rework 200K | 864ms | 294ms (**2.9x**) | — |
+| Batch 1K reps | 6,783ms | — | 473ms (**14.3x**) |
 
 ```bash
 # Run benchmarks yourself:
