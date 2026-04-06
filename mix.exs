@@ -29,7 +29,8 @@ defmodule Sim.MixProject do
   defp deps do
     [
       {:rustler, "~> 0.36", runtime: false},
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:propcheck, "~> 1.4", only: :test, runtime: false}
     ]
   end
 

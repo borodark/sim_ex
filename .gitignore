@@ -28,3 +28,4 @@ sim_ex-*.tar
 
 # Benchmark logs
 *.log
+propcheck.ctex
