@@ -127,16 +127,24 @@ defmodule Sim.DSL.Resource do
   # ============================================================
 
   def handle_event({:release, job_id}, clock, %{preemptive: true} = state) do
-    state = %{state | releases: state.releases + 1, busy: max(state.busy - 1, 0)}
-    state = %{state | holders: Map.delete(state.holders, job_id)}
-    state = maybe_update_capacity(state, clock)
-    grant_from_queue_preemptive(state, clock)
+    if Map.has_key?(state.holders, job_id) do
+      state = %{state | releases: state.releases + 1, busy: state.busy - 1}
+      state = %{state | holders: Map.delete(state.holders, job_id)}
+      state = maybe_update_capacity(state, clock)
+      grant_from_queue_preemptive(state, clock)
+    else
+      {:ok, state, []}
+    end
   end
 
-  def handle_event({:release, _job_id}, clock, state) do
-    state = %{state | releases: state.releases + 1, busy: max(state.busy - 1, 0)}
+  def handle_event({:release, _job_id}, clock, %{busy: busy} = state) when busy > 0 do
+    state = %{state | releases: state.releases + 1, busy: busy - 1}
     state = maybe_update_capacity(state, clock)
     grant_from_queue(state, clock)
+  end
+
+  def handle_event({:release, _job_id}, _clock, state) do
+    {:ok, state, []}
   end
 
   # --- Catch-all ---
