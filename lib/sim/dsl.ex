@@ -81,6 +81,7 @@ defmodule Sim.DSL do
 
       Module.register_attribute(__MODULE__, :sim_resources, accumulate: true)
       Module.register_attribute(__MODULE__, :sim_processes, accumulate: true)
+      Module.register_attribute(__MODULE__, :sim_conveyors, accumulate: true)
       Module.put_attribute(__MODULE__, :sim_model_name, nil)
 
       @before_compile Sim.DSL
@@ -91,7 +92,7 @@ defmodule Sim.DSL do
     quote do
       @sim_model_name unquote(name)
       import Sim.DSL,
-        only: [resource: 2, process: 2, exponential: 1, uniform: 2, constant: 1, label: 1]
+        only: [resource: 2, conveyor: 2, process: 2, exponential: 1, uniform: 2, constant: 1, label: 1]
 
       unquote(block)
     end
@@ -100,6 +101,12 @@ defmodule Sim.DSL do
   defmacro resource(name, opts) do
     quote do
       @sim_resources {unquote(name), unquote(opts)}
+    end
+  end
+
+  defmacro conveyor(name, opts) do
+    quote do
+      @sim_conveyors {unquote(name), unquote(opts)}
     end
   end
 
@@ -161,6 +168,9 @@ defmodule Sim.DSL do
   # route distribution — travel delay between stations (hold without resource)
   defp parse_step({:route, _, [dist]}), do: {:route, eval_dist(dist)}
 
+  # transport :conveyor_name — board conveyor, travel, exit
+  defp parse_step({:transport, _, [name]}) when is_atom(name), do: {:transport, name}
+
   # split N — one part becomes N parts (kitting, unbundling)
   defp parse_step({:split, _, [count]}) when is_integer(count), do: {:split, count}
 
@@ -204,6 +214,7 @@ defmodule Sim.DSL do
   defmacro __before_compile__(env) do
     resources = Module.get_attribute(env.module, :sim_resources) |> Enum.reverse()
     processes = Module.get_attribute(env.module, :sim_processes) |> Enum.reverse()
+    conveyors = Module.get_attribute(env.module, :sim_conveyors) |> Enum.reverse()
     _model_name = Module.get_attribute(env.module, :sim_model_name)
 
     process_modules =
@@ -211,7 +222,7 @@ defmodule Sim.DSL do
         Sim.DSL.Process.compile_entity(env.module, name, steps, resources)
       end)
 
-    run_fn = compile_run(env.module, processes, resources)
+    run_fn = compile_run(env.module, processes, resources, conveyors)
 
     quote do
       (unquote_splicing(process_modules))
@@ -219,7 +230,7 @@ defmodule Sim.DSL do
     end
   end
 
-  defp compile_run(host_module, processes, resources) do
+  defp compile_run(host_module, processes, resources, conveyors \\ []) do
     quote do
       def run(opts \\ []) do
         mode = Keyword.get(opts, :mode, :engine)
@@ -227,7 +238,7 @@ defmodule Sim.DSL do
         stop_time = Keyword.get(opts, :stop_time, 10_000.0)
         stop_tick = Keyword.get(opts, :stop_tick, 10_000)
 
-        entities = unquote(build_entity_list(host_module, processes, resources))
+        entities = unquote(build_entity_list(host_module, processes, resources, conveyors))
         initial_events = unquote(build_initial_events(processes, resources))
 
         sim_opts =
@@ -254,7 +265,7 @@ defmodule Sim.DSL do
     end
   end
 
-  defp build_entity_list(host_module, processes, resources) do
+  defp build_entity_list(host_module, processes, resources, conveyors \\ []) do
     resource_entries =
       Enum.map(resources, fn {name, opts} ->
         schedule = opts[:schedule]
@@ -308,8 +319,22 @@ defmodule Sim.DSL do
         ]
       end)
 
+    conveyor_entries =
+      Enum.map(conveyors, fn {name, opts} ->
+        quote do
+          {unquote(name), Sim.DSL.Conveyor,
+           %{
+             id: unquote(name),
+             length: unquote(opts[:length]),
+             speed: unquote(opts[:speed]),
+             capacity: unquote(opts[:capacity] || 10),
+             seed: seed + :erlang.phash2(unquote(name))
+           }}
+        end
+      end)
+
     quote do
-      unquote(resource_entries ++ process_entries)
+      unquote(resource_entries ++ conveyor_entries ++ process_entries)
     end
   end
 

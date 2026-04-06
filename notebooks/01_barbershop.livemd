@@ -164,18 +164,18 @@ IO.puts("Mean processing:   #{Float.round(result.stats[:part].mean_hold, 2)} min
 
 If you've used Arena, Simio, or FlexSim, here's the mapping:
 
-| Arena / Simio | sim_ex DSL | Notes |
-|---|---|---|
-| CREATE | `arrive every: ...` | Stationary interarrival |
-| CREATE (schedule) | `arrive schedule: [...]` | Non-stationary arrivals |
-| PROCESS (Seize-Delay-Release) | `seize / hold / release` | Split into three verbs |
-| ROUTE | `route distribution` | Travel delay |
-| DECIDE | `decide prob, :label` | Probabilistic branch |
-| SEPARATE / BATCH | `split N` / `batch N` | Unbundling / batching |
-| COMBINE | `combine N` | Assembly (N → 1) |
-| DISPOSE | `depart` | Collects statistics |
-| RESOURCE | `resource :r, capacity: N` | Fixed capacity |
-| SCHEDULE | `resource :r, schedule: [...]` | Time-varying capacity |
+| Arena / Simio                 | sim_ex DSL                     | Notes                   |
+| ----------------------------- | ------------------------------ | ----------------------- |
+| CREATE                        | `arrive every: ...`            | Stationary interarrival |
+| CREATE (schedule)             | `arrive schedule: [...]`       | Non-stationary arrivals |
+| PROCESS (Seize-Delay-Release) | `seize / hold / release`       | Split into three verbs  |
+| ROUTE                         | `route distribution`           | Travel delay            |
+| DECIDE                        | `decide prob, :label`          | Probabilistic branch    |
+| SEPARATE / BATCH              | `split N` / `batch N`          | Unbundling / batching   |
+| COMBINE                       | `combine N`                    | Assembly (N → 1)      |
+| DISPOSE                       | `depart`                       | Collects statistics     |
+| RESOURCE                      | `resource :r, capacity: N`     | Fixed capacity          |
+| SCHEDULE                      | `resource :r, schedule: [...]` | Time-varying capacity   |
 
 All 11 verbs (with multi-form arrive and decide) are implemented
 and tested (61 tests pass).

@@ -178,6 +178,22 @@ defmodule Sim.DSL.Process do
           end
         end
 
+        # Conveyor: board grant acknowledgment (no-op, wait for transport_complete)
+        def handle_event({:board_grant, _conveyor_id, _job_id}, _clock, state) do
+          {:ok, state, []}
+        end
+
+        # Conveyor: transport complete — item exited conveyor, advance to next step
+        def handle_event({:transport_complete, _conveyor_id, job_id}, clock, state) do
+          case Map.get(state.instances, job_id) do
+            nil -> {:ok, state, []}
+            instance ->
+              instance = %{instance | step: instance.step + 1}
+              state = %{state | instances: Map.put(state.instances, job_id, instance)}
+              advance_step(job_id, clock, state)
+          end
+        end
+
         @impl true
         def statistics(state) do
           n = state.completed
@@ -349,6 +365,11 @@ defmodule Sim.DSL.Process do
               {duration, rand_state} = sample_dist(dist, state.rand_state)
               state = %{state | rand_state: rand_state}
               handle_hold(job_id, duration, clock, state)
+
+            {{:transport, conveyor_name}, _idx} ->
+              # Board request to conveyor entity
+              event = make_event(clock, state.mode, conveyor_name, {:board_request, job_id, state.id})
+              {:ok, state, [event]}
 
             {{:split, count}, _idx} ->
               # One part becomes N parts. Original continues, N-1 new instances created.

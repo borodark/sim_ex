@@ -56,7 +56,7 @@ defmodule Sim.MixProject do
       groups_for_modules: [
         Core: [Sim, Sim.Engine, Sim.Engine.Diasca, Sim.Clock, Sim.Calendar, Sim.Topology],
         Entities: [Sim.Entity, Sim.EntityManager, Sim.Source, Sim.Resource, Sim.PHOLD],
-        DSL: [Sim.DSL, Sim.DSL.Process, Sim.DSL.Resource],
+        DSL: [Sim.DSL, Sim.DSL.Process, Sim.DSL.Resource, Sim.DSL.Conveyor],
         Analysis: [Sim.Statistics, Sim.Experiment, Sim.Warmup, Sim.TimeSeries, Sim.Validate]
       ],
       source_ref: "main"
