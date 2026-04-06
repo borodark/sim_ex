@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.3 (2026-04-06)
+
+Conveyor verb, parallel replications, proper_statham.
+
+- `conveyor :belt, length: 100, speed: 10, capacity: 20` + `transport :belt` — capacity-limited delay
+- Parallel replications by default: `Sim.Experiment.replicate` uses all cores (30x vs SimPy)
+- proper_statham: 3 `proper_statem` models (engine, resource isolation, adversarial preemptive) — found spurious-release bug
+- PropCheck (PropEr) hybrid: exact invariants with shrinking, stochastic with hand-rolled
+- Fixed spurious-release bug (releases > grants on ungranted release)
+- Benchmark Section 7: parallel replications with load average reporting
+- 120 tests (11 properties + 109 tests), 0 failures
+
 ## 0.1.2 (2026-04-05)
 
 Three features, property tests, honest benchmarks.

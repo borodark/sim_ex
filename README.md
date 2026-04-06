@@ -82,7 +82,7 @@ Barbershop.run(stop_time: 10_000.0, seed: 42)
 No magic runtime. `mix compile` generates standard `Sim.Entity` modules.
 Works in engine, ETS, tick-diasca, parallel, and Rust modes.
 
-### DSL Verbs — 12 Arena-Style Verbs
+### DSL Verbs — 14 Arena-Style Verbs
 
 | Verb | Arena Equivalent | Description |
 |------|-----------------|-------------|
@@ -98,10 +98,13 @@ Works in engine, ETS, tick-diasca, parallel, and Rust modes.
 | `split N` | SEPARATE | One part becomes N |
 | `combine N` | COMBINE / MATCH | N parts merge into one |
 | `assign :key, value` | ASSIGN | Set attribute on entity instance |
+| `transport :conveyor` | CONVEY | Capacity-limited travel delay |
 | `label :name` | STATION | Jump target for decide |
 | `depart` | DISPOSE | Exit, collect statistics |
 | `resource :r, capacity: N` | RESOURCE | Fixed capacity |
+| `resource :r, preemptive: true` | PREEMPT | Priority-based ejection |
 | `resource :r, schedule: [...]` | SCHEDULE | Time-varying capacity by shift |
+| `conveyor :c, length:, speed:` | CONVEYOR | Physical transport with capacity |
 
 ### Advanced Example — Electronics Manufacturing
 
@@ -188,14 +191,26 @@ Sim.run(
 
 Complexity tax: 1.6x between simplest and most complex.
 
-### sim_ex vs SimPy (head-to-head, 2026-04-05)
+### sim_ex vs SimPy
+
+Single run (per-rep):
 
 | Model | SimPy | sim_ex Elixir | sim_ex Rust |
 |-------|-------|--------------|-------------|
-| Barbershop 200K | 168ms | 89ms (**1.9x**) | 16ms (**10.5x**) |
-| Job Shop 200K | 3,298ms | 1,879ms (**1.8x**) | — |
-| Rework 200K | 864ms | 294ms (**2.9x**) | — |
-| Batch 1K reps | 6,783ms | — | 473ms (**14.3x**) |
+| Barbershop 200K | 127ms | 55ms (**2.3x**) | 15ms (**8.5x**) |
+| Job Shop 200K | 2,479ms | 1,200ms (**2.1x**) | — |
+| Rework 200K | 601ms | 225ms (**2.7x**) | — |
+
+Batch replications (1,000 reps x 200K — the analysis that matters):
+
+| Configuration | Wall time | Per-rep | vs SimPy |
+|---------------|-----------|---------|----------|
+| SimPy (sequential) | ~6,300ms | 6.3ms | 1.0x |
+| Elixir parallel (88 cores) | 683ms | 0.7ms | **9.4x** |
+| Rust NIF parallel (88 cores) | 207ms | 0.2ms | **30x** |
+
+The BEAM's advantage is not per-event speed. It's per-replication concurrency.
+`Sim.Experiment.replicate` is parallel by default.
 
 ```bash
 # Run benchmarks yourself:
@@ -237,11 +252,11 @@ end
 ## Experimental Design
 
 ```elixir
-# 30 independent replications, parallel across cores
+# 1,000 independent replications — parallel by default, all cores
 results = Sim.Experiment.replicate(fn seed ->
   {:ok, r} = Sim.run(my_model(seed))
   r.stats[:server]
-end, 30, parallel: true)
+end, 1000)
 
 # Compare two configurations with common random numbers
 comparison = Sim.Experiment.compare(
