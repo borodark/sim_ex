@@ -558,6 +558,93 @@ end
 IO.puts("")
 
 # ============================================================
+# 7. Parallel Replications
+# ============================================================
+
+IO.puts("  7. Parallel Replications")
+IO.puts("  " <> String.duplicate("─", 56))
+IO.puts("  The single-threaded engine leaves #{System.schedulers_online() - 1} schedulers idle.")
+IO.puts("  Independent replications use them all.")
+IO.puts("")
+
+n_cores = System.schedulers_online()
+n_reps = if quick?, do: n_cores * 2, else: 1000
+stop_time = if quick?, do: 50_000.0, else: 200_000.0
+
+IO.puts("  Reps    Mode          Wall(ms)  Per-rep   Speedup   Load")
+IO.puts("  " <> String.duplicate("─", 66))
+
+# Sequential Elixir
+{l1_before, _, _} = load_avg.()
+t0 = System.monotonic_time(:millisecond)
+for seed <- 1..n_reps do
+  Sim.run(entities: [
+    {:src, Sim.Source, %{id: :src, target: :srv, interarrival: {:exponential, 18.0}, seed: seed}},
+    {:srv, Sim.Resource, %{id: :srv, capacity: 1, service: {:exponential, 16.0}, seed: seed + 1000}}
+  ], initial_events: [{0.0, :src, :generate}], stop_time: stop_time)
+end
+seq_ms = System.monotonic_time(:millisecond) - t0
+{l1_after, _, _} = load_avg.()
+
+IO.puts("  #{String.pad_trailing("#{n_reps}", 8)}" <>
+  "#{String.pad_trailing("Elixir seq", 14)}" <>
+  "#{String.pad_trailing("#{seq_ms}", 10)}" <>
+  "#{String.pad_trailing("#{Float.round(seq_ms / n_reps, 1)}ms", 10)}" <>
+  "#{String.pad_trailing("1.0x", 10)}" <>
+  "#{Float.round(l1_after, 1)}")
+
+# Parallel Elixir
+{l1_before, _, _} = load_avg.()
+t0 = System.monotonic_time(:millisecond)
+1..n_reps
+|> Task.async_stream(fn seed ->
+  Sim.run(entities: [
+    {:src, Sim.Source, %{id: :src, target: :srv, interarrival: {:exponential, 18.0}, seed: seed}},
+    {:srv, Sim.Resource, %{id: :srv, capacity: 1, service: {:exponential, 16.0}, seed: seed + 1000}}
+  ], initial_events: [{0.0, :src, :generate}], stop_time: stop_time)
+end, max_concurrency: n_cores, timeout: 300_000)
+|> Enum.to_list()
+par_ms = System.monotonic_time(:millisecond) - t0
+{l1_after, _, _} = load_avg.()
+
+par_speedup = Float.round(seq_ms / max(par_ms, 1), 1)
+
+IO.puts("  #{String.pad_trailing("#{n_reps}", 8)}" <>
+  "#{String.pad_trailing("Elixir par", 14)}" <>
+  "#{String.pad_trailing("#{par_ms}", 10)}" <>
+  "#{String.pad_trailing("#{Float.round(par_ms / n_reps, 1)}ms", 10)}" <>
+  "#{String.pad_trailing("#{par_speedup}x", 10)}" <>
+  "#{Float.round(l1_after, 1)}")
+
+# Parallel Rust NIF
+steps = [{:seize, 0}, {:hold, {:exponential, 16.0}}, {:release, 0}, :depart]
+
+t0 = System.monotonic_time(:millisecond)
+1..n_reps
+|> Task.async_stream(fn seed ->
+  Sim.run(mode: :rust, resources: [%{capacity: 1}],
+    processes: [%{steps: steps, arrival_mean: 18.0}],
+    stop_tick: trunc(stop_time), seed: seed, batch_size: 1)
+end, max_concurrency: n_cores, timeout: 300_000)
+|> Enum.to_list()
+rust_par_ms = System.monotonic_time(:millisecond) - t0
+{l1_after, _, _} = load_avg.()
+
+rust_speedup = Float.round(seq_ms / max(rust_par_ms, 1), 1)
+
+IO.puts("  #{String.pad_trailing("#{n_reps}", 8)}" <>
+  "#{String.pad_trailing("Rust par", 14)}" <>
+  "#{String.pad_trailing("#{rust_par_ms}", 10)}" <>
+  "#{String.pad_trailing("#{Float.round(rust_par_ms / n_reps, 1)}ms", 10)}" <>
+  "#{String.pad_trailing("#{rust_speedup}x", 10)}" <>
+  "#{Float.round(l1_after, 1)}")
+
+IO.puts("")
+IO.puts("  The #{n_cores - 1} idle schedulers are no longer idle.")
+IO.puts("  Parallel default: Sim.Experiment.replicate(run_fn, #{n_reps})")
+IO.puts("")
+
+# ============================================================
 # SUMMARY
 # ============================================================
 
@@ -582,11 +669,11 @@ end
 {final_l1, final_l5, _} = load_avg.()
 IO.puts("")
 IO.puts("  Load avg:      #{final_l1} / #{final_l5} (now / 5 min)")
-IO.puts("  Observation:   ~1.0 load on #{System.schedulers_online()} cores = single-threaded engine.")
-IO.puts("                 1.49M events/sec from one scheduler. #{System.schedulers_online() - 1} are idle.")
+IO.puts("  Single run:    ~1.0 load (single-threaded engine, by design)")
+IO.puts("  Parallel reps: #{par_speedup}x speedup on #{n_cores} cores (Elixir)")
+IO.puts("                 #{rust_speedup}x speedup on #{n_cores} cores (Rust NIF)")
 IO.puts("  Bottleneck:    Map.fetch! at 100K+ entities (O(log32 N))")
-IO.puts("  Next targets:  ETS entity storage (O(1) lookup),")
-IO.puts("                 sharded calendars (use all #{System.schedulers_online()} schedulers)")
+IO.puts("  Next targets:  ETS entity storage (O(1) lookup)")
 IO.puts("")
 IO.puts("  References:")
 IO.puts("    ROSS single-node:  1.4–1.8M events/sec (C, MPI)")
