@@ -230,7 +230,7 @@ defmodule Sim.DSL do
     end
   end
 
-  defp compile_run(host_module, processes, resources, conveyors \\ []) do
+  defp compile_run(host_module, processes, resources, conveyors) do
     quote do
       def run(opts \\ []) do
         mode = Keyword.get(opts, :mode, :engine)
@@ -265,7 +265,7 @@ defmodule Sim.DSL do
     end
   end
 
-  defp build_entity_list(host_module, processes, resources, conveyors \\ []) do
+  defp build_entity_list(host_module, processes, resources, conveyors) do
     resource_entries =
       Enum.map(resources, fn {name, opts} ->
         schedule = opts[:schedule]
