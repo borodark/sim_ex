@@ -268,6 +268,47 @@ comparison = Sim.Experiment.compare(
 # => %{mean_diff: -0.12, ci: {-0.18, -0.06}, significant: true}
 ```
 
+## Testing: The Clipboard, the Auditor, and the Saboteur
+
+120 tests across three testing dimensions. No DES engine in the
+published literature has been verified with stateful property testing.
+
+**Point tests** (the clipboard) — fixed seed, expected output:
+```bash
+mix test                          # 120 tests, 0 failures
+mix test test/dsl_test.exs        # DSL compilation and execution
+mix test test/features_test.exs   # warmup, time-series, validation
+```
+
+**Property tests** (the auditor) — random parameters, mathematical invariants:
+```bash
+mix test test/property_test.exs   # Little's Law, flow conservation,
+                                  # determinism, edge cases — 350 trials
+```
+
+Uses [PropCheck](https://github.com/alfert/propcheck) (PropEr) for exact
+invariants with shrinking, hand-rolled harness for stochastic invariants
+where PropCheck shrinking chases Monte Carlo noise.
+
+**proper_statham** (the saboteur) — random operation *sequences*, protocol invariants:
+```bash
+mix test test/statham_test.exs    # 700 adversarial command sequences
+```
+
+Three `proper_statem` models generate adversarial sequences of engine
+operations and verify postconditions after each step:
+
+| Model | Commands | What it hunts |
+|-------|----------|---------------|
+| Engine | step, run_n, check | Calendar corruption, clock regression |
+| Resource (isolation) | seize, release, check | Protocol violations, statistics drift |
+| Adversarial (preemptive) | step, run_n, check | Preemption bugs, generation counter failures |
+
+Found one bug that 114 point + property tests missed: releasing an
+ungranted job silently corrupted resource statistics. PropEr shrunk
+the failing sequence to four operations. The Law catches bugs that
+no specific number can.
+
 ## The Simulation That Learns
 
 Every DES engine does Monte Carlo: run 1,000 times, sample inputs from
