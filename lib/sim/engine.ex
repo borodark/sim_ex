@@ -45,30 +45,7 @@ defmodule Sim.Engine do
   - `:stop_time` — virtual time limit
   """
   def run(opts) do
-    entities_spec = Keyword.fetch!(opts, :entities)
-    initial_events = Keyword.fetch!(opts, :initial_events)
-    stop_time = Keyword.get(opts, :stop_time, :infinity)
-
-    # Initialize entity states
-    {entities, modules} =
-      Enum.reduce(entities_spec, {%{}, %{}}, fn {id, module, config}, {ents, mods} ->
-        {:ok, state} = module.init(config)
-        {Map.put(ents, id, state), Map.put(mods, id, module)}
-      end)
-
-    # Build initial calendar
-    {calendar, seq} =
-      Enum.reduce(initial_events, {:gb_trees.empty(), 0}, fn {time, target, event}, {tree, seq} ->
-        {:gb_trees.insert({time, seq}, {target, event}, tree), seq + 1}
-      end)
-
-    engine = %__MODULE__{
-      calendar: calendar,
-      entities: entities,
-      modules: modules,
-      seq: seq,
-      stop_time: stop_time
-    }
+    {:ok, engine} = init(opts)
 
     # Run the tight loop
     engine = loop(engine)
@@ -90,6 +67,77 @@ defmodule Sim.Engine do
        clock: engine.clock,
        events: engine.events_processed,
        stats: stats
+     }}
+  end
+
+  @doc """
+  Execute a single event loop iteration. Returns `{:ok, engine}`,
+  `{:done, engine}` (calendar empty), or `{:stopped, engine}` (past stop_time).
+
+  Used by `proper_statem` for stateful property testing.
+  Production code uses `loop/1` which calls this in a tight loop.
+  """
+  def step(engine) do
+    case :gb_trees.is_empty(engine.calendar) do
+      true ->
+        {:done, engine}
+
+      false ->
+        {{time, _seq}, {target, event}, calendar} =
+          :gb_trees.take_smallest(engine.calendar)
+
+        if time > engine.stop_time do
+          {:stopped, engine}
+        else
+          module = Map.fetch!(engine.modules, target)
+          entity_state = Map.fetch!(engine.entities, target)
+
+          {:ok, new_entity_state, new_events} =
+            module.handle_event(event, time, entity_state)
+
+          {calendar, seq} = insert_events(calendar, engine.seq, new_events)
+
+          engine = %{
+            engine
+            | calendar: calendar,
+              entities: Map.put(engine.entities, target, new_entity_state),
+              seq: seq,
+              clock: time,
+              events_processed: engine.events_processed + 1
+          }
+
+          {:ok, engine}
+        end
+    end
+  end
+
+  @doc """
+  Initialize an engine struct from opts without running it.
+  Returns `{:ok, engine}`.
+  """
+  def init(opts) do
+    entities_spec = Keyword.fetch!(opts, :entities)
+    initial_events = Keyword.fetch!(opts, :initial_events)
+    stop_time = Keyword.get(opts, :stop_time, :infinity)
+
+    {entities, modules} =
+      Enum.reduce(entities_spec, {%{}, %{}}, fn {id, module, config}, {ents, mods} ->
+        {:ok, state} = module.init(config)
+        {Map.put(ents, id, state), Map.put(mods, id, module)}
+      end)
+
+    {calendar, seq} =
+      Enum.reduce(initial_events, {:gb_trees.empty(), 0}, fn {time, target, event}, {tree, seq} ->
+        {:gb_trees.insert({time, seq}, {target, event}, tree), seq + 1}
+      end)
+
+    {:ok,
+     %__MODULE__{
+       calendar: calendar,
+       entities: entities,
+       modules: modules,
+       seq: seq,
+       stop_time: stop_time
      }}
   end
 
