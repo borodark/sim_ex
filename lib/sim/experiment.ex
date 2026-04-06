@@ -25,13 +25,24 @@ defmodule Sim.Experiment do
 
   `run_fn` receives a seed integer and returns a map of metrics.
   Returns list of metric maps.
+
+  Parallel by default — uses all available schedulers. Pass `parallel: false`
+  for sequential execution (deterministic ordering, debugging).
+
+  ## Options
+
+  - `:parallel` — run replications in parallel (default: `true`)
+  - `:max_concurrency` — max parallel tasks (default: `System.schedulers_online()`)
+  - `:base_seed` — starting seed (default: 1)
+  - `:timeout` — per-task timeout (default: `:infinity`)
   """
   def replicate(run_fn, n, opts \\ []) do
     base_seed = opts[:base_seed] || 1
+    parallel = Keyword.get(opts, :parallel, true)
 
     seeds = base_seed..(base_seed + n - 1)
 
-    if opts[:parallel] do
+    if parallel do
       seeds
       |> Task.async_stream(fn seed -> run_fn.(seed) end,
         max_concurrency: opts[:max_concurrency] || System.schedulers_online(),
@@ -54,13 +65,24 @@ defmodule Sim.Experiment do
     seeds = Keyword.fetch!(opts, :seeds)
     metric = Keyword.fetch!(opts, :metric)
     alpha = opts[:alpha] || 0.05
+    parallel = Keyword.get(opts, :parallel, true)
 
     pairs =
-      Enum.map(seeds, fn seed ->
-        a = run_a.(seed)
-        b = run_b.(seed)
-        {Map.fetch!(a, metric), Map.fetch!(b, metric)}
-      end)
+      if parallel do
+        seeds
+        |> Task.async_stream(fn seed ->
+          a = run_a.(seed)
+          b = run_b.(seed)
+          {Map.fetch!(a, metric), Map.fetch!(b, metric)}
+        end, max_concurrency: System.schedulers_online(), timeout: :infinity)
+        |> Enum.map(fn {:ok, result} -> result end)
+      else
+        Enum.map(seeds, fn seed ->
+          a = run_a.(seed)
+          b = run_b.(seed)
+          {Map.fetch!(a, metric), Map.fetch!(b, metric)}
+        end)
+      end
 
     diffs = Enum.map(pairs, fn {a, b} -> a - b end)
     n = length(diffs)
