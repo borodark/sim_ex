@@ -3,8 +3,22 @@
 **Machine:** x86_64, 88 cores (dual Xeon E5-2699 v4)
 **Python:** 3.12.3, SimPy 4.1.1
 **Elixir:** 1.18.3, OTP 27, Rustler 0.36
-**Date:** 2026-04-05 (re-run)
 **Method:** Sequential execution, each gets full CPU.
+
+## Measurement Variance
+
+Results vary 30-40% between runs depending on system load and Python JIT warmup.
+Three measurement runs (same code, same hardware, different days):
+
+| Metric | Apr 4 (load ~1) | Apr 5 (load ~4) | Apr 6 (load ~4) | Honest claim |
+|--------|-----------------|------------------|------------------|-------------|
+| Elixir vs SimPy (barbershop 200K) | 3.7x | 1.9x | 2.3x | **2-3x** |
+| Rust batch 1K reps | 24x, 345ms | 14x, 473ms | 15x, 417ms | **14-15x** |
+| SimPy per-rep cost | 8.3ms | 6.8ms | 6.3ms | Varies 6-8ms |
+
+**Always report load average with benchmark numbers.** A speedup measured on an
+idle 88-core box is not the same speedup on a loaded one. The numbers below are
+from the latest run.
 
 ## Barbershop M/M/1 (interarrival=18, service=16)
 

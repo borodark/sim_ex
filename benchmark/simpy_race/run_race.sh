@@ -23,6 +23,7 @@ echo "  ╚═══════════════════════
 echo ""
 echo "  Machine: $(uname -m)"
 echo "  Cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null)"
+echo "  Load avg: $(cat /proc/loadavg 2>/dev/null | cut -d' ' -f1-3 || uptime | grep -oE 'load average[s]?: [0-9., ]+' || echo 'unknown')"
 echo "  Python: $($PYTHON --version 2>&1)"
 echo "  SimPy: $($PYTHON -c 'import simpy; print(simpy.__version__)' 2>/dev/null || echo 'not installed')"
 echo ""
