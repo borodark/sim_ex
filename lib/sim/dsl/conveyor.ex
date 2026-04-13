@@ -113,20 +113,30 @@ defmodule Sim.DSL.Conveyor do
   end
 
   defp board_from_queue(clock, state) do
-    if map_size(state.in_transit) < state.capacity do
-      case :queue.out(state.queue) do
-        {{:value, {job_id, requestor_id}}, queue} ->
-          state = %{state | queue: queue}
-          {:ok, state, events} = board_item(job_id, requestor_id, clock, state)
-          {more_state, more_events} = board_from_queue(clock, state)
-          {more_state, events ++ more_events}
+    board_if_capacity(
+      map_size(state.in_transit) < state.capacity,
+      clock,
+      state
+    )
+  end
 
-        {:empty, _} ->
-          {state, []}
-      end
-    else
-      {state, []}
-    end
+  # At capacity → no boarding.
+  defp board_if_capacity(false, _clock, state), do: {state, []}
+
+  # Capacity available → try to pop from queue.
+  defp board_if_capacity(true, clock, state) do
+    state.queue |> :queue.out() |> board_from_pop(clock, state)
+  end
+
+  # Queue empty → done.
+  defp board_from_pop({:empty, _}, _clock, state), do: {state, []}
+
+  # Queue had an item → board it and recurse for more.
+  defp board_from_pop({{:value, {job_id, requestor_id}}, queue}, clock, state) do
+    state = %{state | queue: queue}
+    {:ok, state, events} = board_item(job_id, requestor_id, clock, state)
+    {more_state, more_events} = board_from_queue(clock, state)
+    {more_state, events ++ more_events}
   end
 
   defp clock_to_float({tick, _diasca}), do: tick * 1.0

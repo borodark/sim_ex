@@ -80,49 +80,44 @@ defmodule Sim.Clock do
     {:reply, {:ok, state.clock, state.events_processed}, state}
   end
 
-  def handle_call(:step, _from, state) do
-    case advance_one(state) do
-      {:ok, state} -> {:reply, {:ok, state.clock}, state}
-      :empty -> {:reply, :empty, state}
-      :stopped -> {:reply, :stopped, state}
-    end
-  end
+  def handle_call(:step, _from, state), do: state |> advance_one() |> reply_step()
+
+  defp reply_step({:ok, state}), do: {:reply, {:ok, state.clock}, state}
+  defp reply_step({:empty, state}), do: {:reply, :empty, state}
+  defp reply_step({:stopped, state}), do: {:reply, :stopped, state}
 
   # --- Simulation loop ---
 
-  defp run_loop(state) do
-    case advance_one(state) do
-      {:ok, state} -> run_loop(state)
-      :empty -> %{state | status: :done}
-      :stopped -> %{state | status: :done}
-    end
-  end
+  defp run_loop(state), do: state |> advance_one() |> continue_loop()
+
+  defp continue_loop({:ok, state}), do: run_loop(state)
+  defp continue_loop({:empty, state}), do: %{state | status: :done}
+  defp continue_loop({:stopped, state}), do: %{state | status: :done}
 
   defp advance_one(state) do
-    case Sim.Calendar.pop(state.calendar) do
-      {:ok, {time, target, event}} ->
-        if time > state.stop_time do
-          :stopped
-        else
-          new_events = dispatch_event(state.entities, target, event, time)
-
-          Enum.each(new_events, fn {t, tgt, evt} ->
-            Sim.Calendar.push(state.calendar, t, tgt, evt)
-          end)
-
-          if state.stats do
-            Sim.Statistics.record(state.stats, :event, time)
-          end
-
-          {:ok, %{state | clock: time, events_processed: state.events_processed + 1}}
-        end
-
-      :empty ->
-        :empty
-    end
+    state.calendar
+    |> Sim.Calendar.pop()
+    |> handle_pop(state)
   end
 
-  defp dispatch_event(entities, target, event, time) do
-    Sim.EntityManager.dispatch(entities, target, event, time)
+  defp handle_pop(:empty, state), do: {:empty, state}
+
+  defp handle_pop({:ok, {time, _target, _event}}, %{stop_time: stop_time} = state)
+       when time > stop_time,
+       do: {:stopped, state}
+
+  defp handle_pop({:ok, {time, target, event}}, state) do
+    state.entities
+    |> Sim.EntityManager.dispatch(target, event, time)
+    |> Enum.each(fn {t, tgt, evt} ->
+      Sim.Calendar.push(state.calendar, t, tgt, evt)
+    end)
+
+    record_stats(state.stats, time)
+
+    {:ok, %{state | clock: time, events_processed: state.events_processed + 1}}
   end
+
+  defp record_stats(nil, _time), do: :ok
+  defp record_stats(stats, time), do: Sim.Statistics.record(stats, :event, time)
 end

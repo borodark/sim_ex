@@ -70,11 +70,15 @@ defmodule Sim.Experiment do
     pairs =
       if parallel do
         seeds
-        |> Task.async_stream(fn seed ->
-          a = run_a.(seed)
-          b = run_b.(seed)
-          {Map.fetch!(a, metric), Map.fetch!(b, metric)}
-        end, max_concurrency: System.schedulers_online(), timeout: :infinity)
+        |> Task.async_stream(
+          fn seed ->
+            a = run_a.(seed)
+            b = run_b.(seed)
+            {Map.fetch!(a, metric), Map.fetch!(b, metric)}
+          end,
+          max_concurrency: System.schedulers_online(),
+          timeout: :infinity
+        )
         |> Enum.map(fn {:ok, result} -> result end)
       else
         Enum.map(seeds, fn seed ->

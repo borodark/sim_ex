@@ -102,13 +102,14 @@ defmodule Sim.PropertyTest do
 
   defp mmc_gen do
     such_that(
-      {lambda_inv, mu_inv, c_float, seed} <-
+      {lambda_inv, mu_inv, c_float, _seed} <-
         {float(0.5, 5.0), float(0.1, 3.0), float(1.0, 5.99), integer(100, 1_000_000)},
-      when: (fn li, mi, cf ->
-        c = trunc(cf)
-        rho = mi / (c * li)
-        rho >= 0.05 and rho < 0.90
-      end).(lambda_inv, mu_inv, c_float)
+      when:
+        (fn li, mi, cf ->
+           c = trunc(cf)
+           rho = mi / (c * li)
+           rho >= 0.05 and rho < 0.90
+         end).(lambda_inv, mu_inv, c_float)
     )
   end
 
@@ -116,16 +117,24 @@ defmodule Sim.PropertyTest do
     {integer(100, 1_000_000), float(5_000.0, 50_000.0)}
   end
 
-  defp run_mmc({lambda_inv, mu_inv, c_float, seed}, opts \\ []) do
+  defp run_mmc({lambda_inv, mu_inv, c_float, seed}, opts) do
     mode = opts[:mode] || :engine
-    stop = opts[:stop_time] || min(50_000.0, max(20_000.0, 50_000.0 / (1.0 - mu_inv / (trunc(c_float) * lambda_inv))))
+
+    stop =
+      opts[:stop_time] ||
+        min(50_000.0, max(20_000.0, 50_000.0 / (1.0 - mu_inv / (trunc(c_float) * lambda_inv))))
 
     Sim.run(
       entities: [
         {:arrivals, Sim.Source,
          %{id: :arrivals, target: :server, interarrival: {:exponential, lambda_inv}, seed: seed}},
         {:server, Sim.Resource,
-         %{id: :server, capacity: trunc(c_float), service: {:exponential, mu_inv}, seed: seed + 1000}}
+         %{
+           id: :server,
+           capacity: trunc(c_float),
+           service: {:exponential, mu_inv},
+           seed: seed + 1000
+         }}
       ],
       initial_events: [{0.0, :arrivals, :generate}],
       stop_time: stop,
@@ -138,7 +147,7 @@ defmodule Sim.PropertyTest do
   # ================================================================
 
   describe "flow conservation (PropCheck)" do
-    property "departures <= arrivals for random M/M/c", [numtests: 50] do
+    property "departures <= arrivals for random M/M/c", numtests: 50 do
       forall params <- mmc_gen() do
         Enum.all?([:engine, :ets], fn mode ->
           {:ok, result} = run_mmc(params, mode: mode, stop_time: 10_000.0)
@@ -150,11 +159,12 @@ defmodule Sim.PropertyTest do
   end
 
   describe "determinism (PropCheck)" do
-    property "same seed produces identical results", [numtests: 30] do
+    property "same seed produces identical results", numtests: 30 do
       forall params <- mmc_gen() do
         Enum.all?([:engine, :ets], fn mode ->
           {:ok, r1} = run_mmc(params, mode: mode, stop_time: 5_000.0)
           {:ok, r2} = run_mmc(params, mode: mode, stop_time: 5_000.0)
+
           r1.events == r2.events and
             r1.stats[:server].arrivals == r2.stats[:server].arrivals and
             r1.stats[:server].mean_wait == r2.stats[:server].mean_wait
@@ -164,7 +174,7 @@ defmodule Sim.PropertyTest do
   end
 
   describe "cross-mode equivalence (PropCheck)" do
-    property "engine and ets produce identical results", [numtests: 20] do
+    property "engine and ets produce identical results", numtests: 20 do
       forall params <- mmc_gen() do
         {:ok, r_eng} = run_mmc(params, mode: :engine, stop_time: 5_000.0)
         {:ok, r_ets} = run_mmc(params, mode: :ets, stop_time: 5_000.0)
@@ -178,7 +188,7 @@ defmodule Sim.PropertyTest do
   end
 
   describe "DSL flow conservation (PropCheck)" do
-    property "barbershop: arrivals == completed + in_progress", [numtests: 50] do
+    property "barbershop: arrivals == completed + in_progress", numtests: 50 do
       forall {seed, stop_time} <- dsl_gen() do
         {:ok, result} = Sim.PropertyModels.Barbershop.run(stop_time: stop_time, seed: seed)
         src = result.stats[:customer_source]
@@ -189,21 +199,21 @@ defmodule Sim.PropertyTest do
   end
 
   describe "edge cases (PropCheck)" do
-    property "decide(0.0) routes nobody", [numtests: 20] do
+    property "decide(0.0) routes nobody", numtests: 20 do
       forall {seed, stop_time} <- dsl_gen() do
         {:ok, result} = Sim.PropertyModels.NoRework.run(stop_time: stop_time, seed: seed)
         result.stats[:rework].grants == 0
       end
     end
 
-    property "decide(1.0) routes everyone", [numtests: 20] do
+    property "decide(1.0) routes everyone", numtests: 20 do
       forall {seed, stop_time} <- dsl_gen() do
         {:ok, result} = Sim.PropertyModels.AllRework.run(stop_time: stop_time, seed: seed)
         abs(result.stats[:rework].grants - result.stats[:part].completed) <= 1
       end
     end
 
-    property "combine(1) is identity", [numtests: 20] do
+    property "combine(1) is identity", numtests: 20 do
       forall {seed, stop_time} <- dsl_gen() do
         {:ok, result} = Sim.PropertyModels.Combine1.run(stop_time: stop_time, seed: seed)
         m = result.stats[:machine].grants
@@ -214,7 +224,7 @@ defmodule Sim.PropertyTest do
       end
     end
 
-    property "split(3)/combine(3) conserves entities", [numtests: 20] do
+    property "split(3)/combine(3) conserves entities", numtests: 20 do
       forall {seed, stop_time} <- dsl_gen() do
         {:ok, result} = Sim.PropertyModels.SplitCombine.run(stop_time: stop_time, seed: seed)
         cutter = result.stats[:cutter].grants
@@ -242,9 +252,19 @@ defmodule Sim.PropertyTest do
           Sim.run(
             entities: [
               {:arrivals, Sim.Source,
-               %{id: :arrivals, target: :server, interarrival: {:exponential, params.lambda_inv}, seed: params.seed}},
+               %{
+                 id: :arrivals,
+                 target: :server,
+                 interarrival: {:exponential, params.lambda_inv},
+                 seed: params.seed
+               }},
               {:server, Sim.Resource,
-               %{id: :server, capacity: 1, service: {:exponential, params.mu_inv}, seed: params.seed + 1000}}
+               %{
+                 id: :server,
+                 capacity: 1,
+                 service: {:exponential, params.mu_inv},
+                 seed: params.seed + 1000
+               }}
             ],
             initial_events: [{0.0, :arrivals, :generate}],
             stop_time: params.stop_time
@@ -268,9 +288,19 @@ defmodule Sim.PropertyTest do
           Sim.run(
             entities: [
               {:arrivals, Sim.Source,
-               %{id: :arrivals, target: :server, interarrival: {:exponential, params.lambda_inv}, seed: params.seed}},
+               %{
+                 id: :arrivals,
+                 target: :server,
+                 interarrival: {:exponential, params.lambda_inv},
+                 seed: params.seed
+               }},
               {:server, Sim.Resource,
-               %{id: :server, capacity: 1, service: {:exponential, params.mu_inv}, seed: params.seed + 1000}}
+               %{
+                 id: :server,
+                 capacity: 1,
+                 service: {:exponential, params.mu_inv},
+                 seed: params.seed + 1000
+               }}
             ],
             initial_events: [{0.0, :arrivals, :generate}],
             stop_time: params.stop_time

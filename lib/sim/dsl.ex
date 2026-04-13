@@ -92,7 +92,15 @@ defmodule Sim.DSL do
     quote do
       @sim_model_name unquote(name)
       import Sim.DSL,
-        only: [resource: 2, conveyor: 2, process: 2, exponential: 1, uniform: 2, constant: 1, label: 1]
+        only: [
+          resource: 2,
+          conveyor: 2,
+          process: 2,
+          exponential: 1,
+          uniform: 2,
+          constant: 1,
+          label: 1
+        ]
 
       unquote(block)
     end

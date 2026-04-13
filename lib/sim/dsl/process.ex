@@ -153,6 +153,7 @@ defmodule Sim.DSL.Process do
 
               # Calculate remaining hold time from hold_end
               now = clock_to_float(clock, 0)
+
               remaining_time =
                 if instance.hold_end do
                   max(instance.hold_end - now, 0.001)
@@ -165,10 +166,11 @@ defmodule Sim.DSL.Process do
               # step so advance_step will re-issue the seize_request.
               seize_step = instance.step - 1
 
-              instance = %{instance |
-                hold_gen: new_gen,
-                remaining_hold: remaining_time,
-                step: seize_step
+              instance = %{
+                instance
+                | hold_gen: new_gen,
+                  remaining_hold: remaining_time,
+                  step: seize_step
               }
 
               state = %{state | instances: Map.put(state.instances, job_id, instance)}
@@ -186,7 +188,9 @@ defmodule Sim.DSL.Process do
         # Conveyor: transport complete — item exited conveyor, advance to next step
         def handle_event({:transport_complete, _conveyor_id, job_id}, clock, state) do
           case Map.get(state.instances, job_id) do
-            nil -> {:ok, state, []}
+            nil ->
+              {:ok, state, []}
+
             instance ->
               instance = %{instance | step: instance.step + 1}
               state = %{state | instances: Map.put(state.instances, job_id, instance)}
@@ -230,7 +234,12 @@ defmodule Sim.DSL.Process do
               state = %{state | instances: Map.put(state.instances, job_id, instance)}
 
               event =
-                make_event(clock, state.mode, resource_name, {:seize_request, job_id, state.id, priority})
+                make_event(
+                  clock,
+                  state.mode,
+                  resource_name,
+                  {:seize_request, job_id, state.id, priority}
+                )
 
               {:ok, state, [event]}
 
@@ -262,10 +271,12 @@ defmodule Sim.DSL.Process do
                 end
 
               now = clock_to_float(clock, 0)
-              instance = %{instance |
-                hold_start: now,
-                hold_end: now + duration,
-                remaining_hold: nil
+
+              instance = %{
+                instance
+                | hold_start: now,
+                  hold_end: now + duration,
+                  remaining_hold: nil
               }
 
               state = %{
@@ -368,7 +379,9 @@ defmodule Sim.DSL.Process do
 
             {{:transport, conveyor_name}, _idx} ->
               # Board request to conveyor entity
-              event = make_event(clock, state.mode, conveyor_name, {:board_request, job_id, state.id})
+              event =
+                make_event(clock, state.mode, conveyor_name, {:board_request, job_id, state.id})
+
               {:ok, state, [event]}
 
             {{:split, count}, _idx} ->

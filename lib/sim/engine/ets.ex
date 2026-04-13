@@ -96,41 +96,47 @@ defmodule Sim.Engine.ETS do
 
   # --- Tight loop: ETS lookup/insert instead of Map fetch/put ---
 
-  defp loop(engine) do
-    case :gb_trees.is_empty(engine.calendar) do
-      true ->
-        engine
+  defp loop(engine), do: engine |> advance_one() |> continue_loop()
 
-      false ->
-        {{time, _seq}, {target, event}, calendar} =
-          :gb_trees.take_smallest(engine.calendar)
+  defp continue_loop({:ok, engine}), do: loop(engine)
+  defp continue_loop({:done, engine}), do: engine
+  defp continue_loop({:stopped, engine}), do: engine
 
-        if time > engine.stop_time do
-          engine
-        else
-          # O(1) lookups — the whole point
-          module = :ets.lookup_element(engine.module_table, target, 2)
-          entity_state = :ets.lookup_element(engine.entity_table, target, 2)
+  defp advance_one(engine) do
+    engine.calendar |> :gb_trees.is_empty() |> handle_pop(engine)
+  end
 
-          {:ok, new_state, new_events} =
-            module.handle_event(event, time, entity_state)
+  defp handle_pop(true, engine), do: {:done, engine}
 
-          # O(1) in-place update — no HAMT copy, no garbage
-          :ets.insert(engine.entity_table, {target, new_state})
+  defp handle_pop(false, engine) do
+    engine.calendar |> :gb_trees.take_smallest() |> step_forward(engine)
+  end
 
-          # Insert new events into calendar
-          {calendar, seq} = insert_events(calendar, engine.seq, new_events)
+  defp step_forward({{time, _seq}, _ev, _cal}, %{stop_time: stop_time} = engine)
+       when time > stop_time,
+       do: {:stopped, engine}
 
-          %{
-            engine
-            | calendar: calendar,
-              seq: seq,
-              clock: time,
-              events_processed: engine.events_processed + 1
-          }
-          |> loop()
-        end
-    end
+  defp step_forward({{time, _seq}, {target, event}, calendar}, engine) do
+    # O(1) lookups — the whole point
+    module = :ets.lookup_element(engine.module_table, target, 2)
+    entity_state = :ets.lookup_element(engine.entity_table, target, 2)
+
+    {:ok, new_state, new_events} =
+      module.handle_event(event, time, entity_state)
+
+    # O(1) in-place update — no HAMT copy, no garbage
+    :ets.insert(engine.entity_table, {target, new_state})
+
+    {calendar, seq} = insert_events(calendar, engine.seq, new_events)
+
+    {:ok,
+     %{
+       engine
+       | calendar: calendar,
+         seq: seq,
+         clock: time,
+         events_processed: engine.events_processed + 1
+     }}
   end
 
   @compile {:inline, insert_events: 3}

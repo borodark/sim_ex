@@ -1,0 +1,570 @@
+\documentclass[sigplan,review,anonymous=false]{acmart}
+
+%% Rights / copyright — will be set by ACM after acceptance
+\setcopyright{none}
+\acmConference[Erlang '26]{25th ACM SIGPLAN Erlang Workshop}{August 28, 2026}{Indianapolis, IN, USA}
+\acmYear{2026}
+\acmDOI{}
+\acmISBN{}
+
+%% Packages
+\usepackage{lmodern}
+\usepackage{listings}
+\usepackage{booktabs}
+
+%% Elixir listing style
+\lstdefinelanguage{elixir}{
+  morekeywords={def,defp,defmodule,do,end,fn,use,case,when,true,false,nil,
+    and,or,not,in,forall,property,assert},
+  sensitive=true,
+  morecomment=[l]{\#},
+  morestring=[b]",
+  morestring=[b]'
+}
+\lstset{
+  language=elixir,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries,
+  breaklines=true,
+  frame=none,
+  xleftmargin=1em,
+  aboveskip=0.5em,
+  belowskip=0.5em
+}
+
+\begin{document}
+
+\title{sim\_ex: Verifying a Concurrent DES Library with PropEr}
+\subtitle{Inter-Engine Equivalence, Causal Ordering, and the Bug 700 Sequences Found}
+
+\author{Igor Ostaptchenko}
+\email{io@octanix.com}
+\affiliation{%
+  \institution{Octanix Americas LLC / Wayne State University}
+  \city{Detroit}
+  \state{MI}
+  \country{USA}
+}
+
+\begin{abstract}
+Discrete event simulation engines on the BEAM have been demonstrated at
+scale---Sim-Diasca at EDF, InterSCSimulator for urban traffic---but
+their verification has been limited to point tests and trace-based
+assertions. We present a three-tier verification methodology for
+sim\_ex, a multi-engine DES library for Elixir/OTP: point tests, property
+tests with a hybrid stochastic harness, and stateful command-sequence
+tests via \texttt{proper\_statem}. Three \texttt{proper\_statem} models
+generate approximately 700 adversarial command sequences per run in 1.5
+seconds and found three bugs the existing suite had missed, including a
+spurious-release protocol error shrunk to four steps. We formulate
+inter-engine equivalence as a PropEr property and report results for
+strict and statistical equivalence across three of five backends. A
+probe against Sim-Diasca's scheduling core (1,600 trials, 8 properties,
+no failures) validates transferability. The methodology transfers; the
+postconditions are engine-specific.
+\end{abstract}
+
+\begin{CCSXML}
+<ccs2012>
+<concept>
+<concept_id>10011007.10011074.10011099.10011102.10011103</concept_id>
+<concept_desc>Software and its engineering~Software testing and debugging</concept_desc>
+<concept_significance>500</concept_significance>
+</concept>
+<concept>
+<concept_id>10011007.10011074.10011099.10011102.10011104</concept_id>
+<concept_desc>Software and its engineering~Formal software verification</concept_desc>
+<concept_significance>300</concept_significance>
+</concept>
+<concept>
+<concept_id>10002950.10003714.10003715.10003719</concept_id>
+<concept_desc>Mathematics of computing~Stochastic processes</concept_desc>
+<concept_significance>100</concept_significance>
+</concept>
+</ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Software and its engineering~Software testing and debugging}
+\ccsdesc[300]{Software and its engineering~Formal software verification}
+\ccsdesc[100]{Mathematics of computing~Stochastic processes}
+
+\keywords{property-based testing, discrete event simulation, Erlang,
+  Elixir, BEAM, PropEr, proper\_statem, inter-engine equivalence}
+
+\maketitle
+
+\section{Introduction}
+
+Discrete event simulation on the BEAM is not new. Sim-Diasca ran
+million-actor simulations at EDF in 2010~\cite{boudeville2010};
+InterSCSimulator scaled urban traffic models to comparable
+sizes~\cite{santana2017}.
+
+What has received less attention is adversarial verification of the
+engine itself---the event calendar, the dispatch loop, the resource
+protocol, the causal ordering guarantees. We have not found published
+work that subjects DES engine internals to property-based or stateful
+randomized testing. Point tests catch the bugs the developer
+anticipated; the bugs that matter are the ones nobody did.
+
+Property-based testing generates random inputs and checks invariants,
+with automatic shrinking to minimal counterexamples~\cite{claessen2000}.
+Stateful PBT via \texttt{proper\_statem}~\cite{papadakis2011} generates
+random \emph{command sequences}, verifying postconditions after each
+step. Applied to Erlang/OTP at Ericsson and Volvo~\cite{arts2006,
+hughes2007,hughes2016}, but not, to our knowledge, to a discrete event
+simulation engine.
+
+This paper presents the verification methodology for sim\_ex, an
+open-source multi-engine DES library for Elixir/OTP with five backends,
+a 14-verb DSL, and a Rust NIF engine. Five contributions:
+
+\begin{enumerate}
+\item A \textbf{three-tier testing taxonomy}---\emph{clipboard} (point
+  tests), \emph{auditor} (property tests with shrinking),
+  \emph{saboteur} (stateful command-sequence tests)---and an account of
+  how the tiers complement each other.
+
+\item A \textbf{hybrid stochastic harness} that separates deterministic
+  invariants (shrinkable) from statistical invariants (not shrinkable) to
+  prevent PropCheck's shrinker from chasing Monte Carlo noise.
+
+\item Three \textbf{\texttt{proper\_statem} models} generating
+  ${\sim}700$ adversarial command sequences per test run in 1.5~seconds.
+
+\item \textbf{Three bugs found}---a spurious-release protocol error
+  (four-step shrunk sequence), a missing pattern clause in the parallel
+  engine, and a silent integration failure between the DSL and the Rust
+  NIF that returns \texttt{\{:ok, \_\}} with zero events processed.
+
+\item \textbf{Inter-engine equivalence as a PropEr property}, with
+  empirical results for strict equivalence (engine vs.\ ETS, 30 trials,
+  all identical) and statistical equivalence (engine vs.\ diasca, 60
+  trials, within documented tolerance). The equivalence work surfaced an
+  undocumented architectural taxonomy: the five backends split into a
+  \emph{time group} (float) and a \emph{tick group} (integer with
+  $(T, D)$ timestamps).
+\end{enumerate}
+
+To test transferability, we extracted the pure scheduling functions from
+Sim-Diasca's \texttt{class\_TimeManager.erl} and ran 1,600 PropEr
+trials across 8 properties. All passed, as one would expect of code in
+current service at EDF since fifteen years.
+
+sim\_ex is open-source under Apache-2.0. \texttt{mix test} reproduces
+every result in this paper.
+
+Joe Armstrong was a physicist. Physicists bring \emph{informed
+priors}---conservation laws, causality, monotonicity. Armstrong at
+Ericsson could not let a phone ring before it was dialed; Boudeville at
+EDF whose day job forbids releasing energy before fission. Causality was
+not a feature they added; it was the thing they knew how to draw.
+
+But the simulation models that run \emph{on} the BEAM inherit no such
+instincts. In a simulation, conservation holds only if someone wrote a
+postcondition to check it. Property-based testing is the conservation
+law made executable. PropEr enforces what gravity enforces for free. Joe
+always advised: solve the hardest problem first. In a simulation engine,
+the hardest problem is correctness under inputs no well-formed model
+would ever produce---the spurious release, the dangling event, the
+calendar that silently reorders---because the developer cannot imagine
+what the developer cannot imagine. That is the problem this paper takes
+first. The physicist built the machine; we are building the physics.
+
+
+\section{sim\_ex Architecture}
+
+sim\_ex maps Averill Law's simulation methodology~\cite{law2014} to OTP.
+Same model, five backends, no code changes.
+
+\subsection{Entities and the Event Loop}
+
+The fundamental abstraction is the \texttt{Sim.Entity} behaviour:
+
+\begin{lstlisting}
+@callback init(config :: map()) :: {:ok, state}
+@callback handle_event(event, clock, state)
+    :: {:ok, new_state, [new_events]}
+@callback statistics(state) :: map()
+\end{lstlisting}
+
+An entity receives an event and a clock, updates its state, returns new
+events. Calendar: \texttt{:gb\_trees} keyed by \texttt{\{time,
+sequence\_number\}} for FIFO tie-breaking. Statistics: Welford's online
+algorithm, constant memory.
+
+\subsection{Five Execution Backends}
+
+\textbf{Engine} (default). Tail-recursive loop, single process, Map for
+entity states, \texttt{:gb\_trees} calendar. 270K events/sec on PHOLD.
+
+\textbf{ETS}. Same loop, entity states in ETS with write concurrency.
+A stepping stone toward parallelism.
+
+\textbf{Diasca}. Implements Sim-Diasca's causal ordering~\cite{boudeville2010}.
+Events carry $(T, D)$ timestamps; tick $T{+}1$ begins only at
+quiescence. Tags: \texttt{:same\_tick} ${\to}(T,D{+}1)$,
+\texttt{:tick} ${\to}(T',0)$, \texttt{:delay} ${\to}(T{+}\delta,0)$.
+
+\textbf{Parallel}. Extends Diasca with concurrent dispatch: events at
+$(T, D)$ are causally independent and can be partitioned across a
+persistent worker pool.
+
+\textbf{Rust NIF}. Entire simulation in one NIF call: BinaryHeap
+calendar, Vec states, \texttt{rand} crate. 6.4M events/sec---$25\times$
+the Elixir engine per core. Accepts DSL-compiled step lists only.
+
+\subsection{The Engine Taxonomy}
+
+A discovery from the equivalence work (Section~6): the five engines
+split into two groups by time representation.
+
+\begin{table}[h]
+\footnotesize
+\begin{tabular}{@{}llll@{}}
+\toprule
+Group & Engines & Clock & Stop \\
+\midrule
+Time & Eng., ETS & float & stop\_time \\
+Tick & Diasca, Par., Rust & \{tick,diasca\} & stop\_tick \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The protocols are incompatible (Section~5). This taxonomy was not
+designed; PropEr surfaced it on the first generated input.
+
+\subsection{The DSL}
+
+A 14-verb language inspired by GPSS~\cite{gordon1961} and
+Arena~\cite{kelton2015}, compiled at \texttt{mix compile} time to
+\texttt{Sim.Entity} modules:
+
+\begin{lstlisting}
+defmodule Barbershop do
+  use Sim.DSL
+  model :barbershop do
+    resource :barber, capacity: 1
+    process :customer do
+      arrive every: exponential(18.0)
+      seize :barber
+      hold exponential(16.0)
+      release :barber
+      depart
+    end
+  end
+end
+\end{lstlisting}
+
+\texttt{Sim.Source} detects the clock type by pattern matching and emits
+the appropriate event tags. One keyword change switches a DSL model
+between \texttt{:engine}, \texttt{:ets}, and \texttt{:diasca}---the
+natural input for equivalence testing.
+
+\subsection{Design Principles}
+
+Three principles matter for verification: (1)~\textbf{functional
+PRNG}---\texttt{:rand} state threaded through entities; same seed, same
+trajectory; CRN for free. (2)~\textbf{Process = entity
+(optional)}---the \texttt{Sim.Entity} behaviour is agnostic to hosting
+model; same code, five backends. (3)~\textbf{Zero runtime
+dependencies}---\texttt{mix test} reproduces every result in this paper.
+
+
+\section{The Three-Tier Testing Taxonomy}
+
+A simulation engine's inputs are stochastic; its outputs are
+distributions. \texttt{grants >= releases} is a conservation law, not a
+software requirement. An engine tested without postconditions may be
+computationally valid but physically meaningless.
+
+Three strategies: \emph{the clipboard}, \emph{the auditor}, \emph{the
+saboteur}.
+
+\subsection{The Clipboard (Point Tests)}
+
+Fixed seed, expected output. Over a hundred tests, under two seconds.
+Weakness: the developer must imagine the bug to write the test.
+
+\subsection{The Auditor (Property Tests)}
+
+PropCheck~\cite{alfert2019} generates random M/M/c configurations and
+checks invariants: flow conservation, determinism, cross-mode
+equivalence, DSL verb semantics. On failure, shrinking isolates the
+minimal counterexample. ${\sim}100$ seconds. Weakness: it tests
+\emph{scenarios}, not \emph{operation sequences}---it will never release
+a job that was never seized.
+
+\subsection{The Saboteur (Stateful Tests)}
+
+\texttt{proper\_statem}~\cite{papadakis2011} generates random command
+sequences, verifying postconditions after every step. It releases jobs
+never seized, steps engines never initialized. Three models, ${\sim}700$
+sequences, 1.5~seconds. The Resource model found the bug the clipboard
+and auditor missed (Section~5).
+
+\subsection{The Hybrid Stochastic Harness}
+
+Little's Law holds in expectation, not on finite runs. Written as a
+PropCheck property, the shrinker chases noise---reducing run length
+until the sample is too small.
+
+Solution: \textbf{deterministic invariants} use PropCheck with
+shrinking. \textbf{Stochastic invariants} use a hand-rolled
+harness---deterministic seeds, no shrinking, runs long enough for
+convergence. Shrink what you can; replay what you can't.
+
+
+\section{proper\_statem Models}
+
+Three models, different engine layers. Engine state cannot be a PropEr
+symbolic variable; the workaround is the process dictionary. Optimistic
+\texttt{next\_state} updates (guarded by \texttt{when
+is\_number(clock)}) allow meaningful symbolic-phase command generation.
+
+\textbf{Model~1 (Sim.Statham).} Full engine, barbershop scenario.
+Commands: \texttt{init}, \texttt{step}, \texttt{run\_n},
+\texttt{check}. Postconditions: calendar sortedness, target validity,
+flow conservation, clock monotonicity. 200 sequences, 365~ms.
+
+\textbf{Model~2 (Sim.Statham.Resource).} Seize/release protocol in
+isolation. The \texttt{release} command is generated only for held job
+IDs---the constraint that surfaced the bug. Postconditions: capacity
+containment, grant-release balance. 300 sequences, 135~ms.
+
+\textbf{Model~3 (Sim.Statham.Adversarial).} Preemptive resource with
+rush/normal order sources. Exercises the generation-counter logic that
+invalidates stale hold-complete events. 200 sequences, 150~ms.
+
+
+\section{Found Bugs}
+
+Three bugs, none affecting a production model, all latent under the
+existing test strategy.
+
+\textbf{Bug~1: spurious release.} Four-step shrunk sequence:
+
+{\footnotesize\texttt{init(cap=3,preemptive), seize(1), release(1), release(3)}}
+
+\noindent Job~3 was never seized; the engine accepted the release
+silently. \texttt{releases} exceeded \texttt{grants}. Fix: a
+\texttt{Map.has\_key?} guard. Adversarial testing defends against bugs
+that do not yet exist.
+
+\textbf{Bug~2: parallel engine crash.} Barbershop with
+\texttt{mode:~:parallel} crashed in
+\texttt{insert\_diasca\_events/5}---the DSL emits float-time
+three-tuples; the parallel engine matches only diasca-tagged events.
+No test had ever run a DSL model on the parallel engine. A naive bridge
+clause caused infinite diasca progression (two BEAM processes at
+140\%~CPU, killed with \texttt{SIGKILL}); the fix requires entity-side
+tick awareness in the DSL compiler.
+
+\textbf{Bug~3: Rust NIF silent no-op.} \texttt{mode: :rust} returns
+\texttt{\{:ok, \%\{events: 0\}\}}. The DSL passes \texttt{:entities};
+the Rust engine expects step lists. It silently ignores the unrecognized
+options. Worse than a crash: it passes any \texttt{\{:ok, \_\}} smoke
+test.
+
+The saboteur does not respect the developer's mental model of what the
+system is for. That is the source of its value.
+
+
+\section{Inter-Engine Equivalence}
+
+Same model, same seed, two engines, different statistics: at least one
+is wrong.
+
+\subsection{Equivalence Relation}
+
+\textbf{Strict} (within the time group): bitwise-identical output.
+
+\begin{lstlisting}
+r_eng.events == r_ets.events and
+  r_eng.stats == r_ets.stats
+\end{lstlisting}
+
+\textbf{Statistical} (across the time/tick boundary): integer counts
+within max(5, 5\%); float statistics within 35\% relative (rounding
+compounds across service stages). Snapshot fields (\texttt{in\_progress},
+\texttt{busy}) are excluded---they depend on the exact stop boundary.
+
+\subsection{T1: Within-Time-Group}
+
+Engine vs.\ ETS, random M/M/c scenarios ($\rho \in [0.10, 0.85)$). 30
+trials, all identical, 1.5~seconds.
+
+\subsection{T2': Cross-Group DSL Equivalence}
+
+Engine vs.\ ETS vs.\ Diasca, two DSL models (Barbershop and
+SplitCombine), 30 seeds each.
+
+\begin{table}[h]
+\small
+\begin{tabular}{lll}
+\toprule
+Model & Engine $\leftrightarrow$ ETS & Engine $\leftrightarrow$ Diasca \\
+\midrule
+Barbershop & All identical & mean\_wait 2--5\% \\
+SplitCombine & All identical & mean\_wait up to 25\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+180 runs, 3.2~seconds, 0 failures. SplitCombine's divergence:
+integer-tick rounding compounding across three stages. A consequence,
+not a bug.
+
+\subsection{Discovery: The Engine Taxonomy}
+
+An early equivalence property included \texttt{:parallel}. PropEr's
+first input failed: \texttt{:parallel} ignores \texttt{stop\_time} and
+operates on \texttt{\{tick, diasca\}}. The property was wrong about what
+the engines \emph{are}, not what they \emph{should} do. PBT surfaces
+architectural knowledge documented nowhere.
+
+
+\section{Performance}
+
+All benchmarks: 88-core Xeon E5-2699 v4, OTP~27, Elixir~1.18.3.
+
+\textbf{Event throughput.} Elixir engine: 270K events/sec (PHOLD, 100
+LPs). Rust NIF: 6.4M events/sec (barbershop). DSL complexity tax
+between simplest and most complex model: $1.6\times$.
+
+\textbf{Parallel replication}---the number that matters:
+
+\begin{table}[h]
+\small
+\begin{tabular}{lrl}
+\toprule
+Configuration & Wall time & vs SimPy \\
+\midrule
+SimPy (sequential) & ${\sim}6{,}300$ ms & $1.0\times$ \\
+Elixir parallel (88 cores) & 683 ms & $9.4\times$ \\
+Rust NIF parallel (88 cores) & 207 ms & $30\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+1,000 replications of a 200K-event model. The analysis Law describes as
+rarely performed~\cite{law2014} completes in 207~ms. Functional PRNG,
+no shared state, no GIL.
+
+\textbf{Verification overhead.} Full suite in ${\sim}110$ seconds. Fast
+enough for CI.
+
+
+\section{Related Work and Conclusion}
+
+\subsection{BEAM-Based Simulation}
+
+Sim-Diasca~\cite{boudeville2010} is the foundational BEAM DES engine.
+sim\_ex's contribution is not the engine but the verification.
+
+We extracted two pure functions from Sim-Diasca's
+\texttt{class\_TimeManager.erl} (8,289 lines). 1,600 PropEr trials, 8
+properties, no failures. Partly explained by architecture: Sim-Diasca's
+WOOPER class hierarchy prevents certain bug classes by
+construction---actors cannot emit calendar events directly, forge
+timestamps, or use unrecognized event tags. We tested the guts; the
+architecture protects the surface.
+
+Two design points: Sim-Diasca prevents bugs architecturally; sim\_ex
+permits flexibility and relies on testing. The methodology is necessary
+for the second, informative for the first.
+InterSCSimulator~\cite{santana2017} and Toscano et al.~\cite{toscano2012}
+would benefit from the same approach.
+
+\subsection{Property-Based Testing}
+
+Heritage: Claessen and Hughes~\cite{claessen2000}, Papadakis and
+Sagonas~\cite{papadakis2011}, Arts et al.~\cite{arts2006},
+Hughes~\cite{hughes2007,hughes2016}. Our contribution: the domain
+(DES), the hybrid harness, the equivalence framing.
+
+\subsection{Conclusion}
+
+Three tiers, three bugs, one architectural taxonomy the developers did
+not know they had. The Sim-Diasca probe passed 1,600 trials, validating
+transferability. The postcondition encodes what the developer knows
+about the physical system and constrains the simulation to the region
+where physics lives. The physicist built the machine; we are building
+the physics.
+
+sim\_ex, the test suite, and the Sim-Diasca probe are open-source at
+\url{https://github.com/borodark/sim_ex}.
+
+
+\bibliographystyle{ACM-Reference-Format}
+\begin{thebibliography}{10}
+
+\bibitem{boudeville2010}
+Olivier Boudeville.
+\newblock \emph{Sim-Diasca: Technical Manual of the Sim-Diasca Simulation
+  Engine}.
+\newblock EDF R\&D, 2010.
+\newblock \url{https://github.com/Olivier-Boudeville-EDF/Sim-Diasca}
+
+\bibitem{santana2017}
+Eduardo F.~Z. Santana, Nelson Lago, Fabio Kon, and Dejan S. Milojicic.
+\newblock InterSCSimulator: Large-scale traffic simulation in smart cities
+  using Erlang.
+\newblock In \emph{Proc.\ MABS (Multi-Agent Based Simulation)}, LNCS,
+  pp.~211--227. Springer, 2018.
+
+\bibitem{claessen2000}
+Koen Claessen and John Hughes.
+\newblock QuickCheck: A lightweight tool for random testing of Haskell programs.
+\newblock In \emph{Proc.\ ICFP}, pp.~268--279. ACM, 2000.
+
+\bibitem{papadakis2011}
+Manolis Papadakis and Kostis Sagonas.
+\newblock A PropEr integration of types and function specifications with
+  property-based testing.
+\newblock In \emph{Proc.\ Erlang Workshop}, pp.~39--50. ACM, 2011.
+
+\bibitem{arts2006}
+Thomas Arts, John Hughes, Joakim Johansson, and Ulf Wiger.
+\newblock Testing telecoms software with Quviq QuickCheck.
+\newblock In \emph{Proc.\ Erlang Workshop}, pp.~2--10. ACM, 2006.
+
+\bibitem{hughes2007}
+John Hughes.
+\newblock QuickCheck testing for fun and profit.
+\newblock In \emph{Proc.\ PADL}, LNCS~4354, pp.~1--32. Springer, 2007.
+
+\bibitem{hughes2016}
+John Hughes.
+\newblock Experiences with QuickCheck: Testing the hard stuff and staying sane.
+\newblock In \emph{A List of Successes That Can Change the World}, LNCS~9600,
+  pp.~169--186. Springer, 2016.
+
+\bibitem{law2014}
+Averill~M. Law.
+\newblock \emph{Simulation Modeling and Analysis}.
+\newblock McGraw-Hill, 5th edition, 2014.
+
+\bibitem{gordon1961}
+Geoffrey Gordon.
+\newblock A general purpose systems simulation program.
+\newblock In \emph{Proc.\ EJCC}, pp.~87--104. Macmillan, 1961.
+
+\bibitem{kelton2015}
+W.~David Kelton, Randall~P. Sadowski, and Nancy~B. Zupick.
+\newblock \emph{Simulation with Arena}.
+\newblock McGraw-Hill, 6th edition, 2015.
+
+\bibitem{alfert2019}
+Klaus Alfert.
+\newblock PropCheck: Property-based testing for Elixir.
+\newblock \url{https://github.com/alfert/propcheck}, 2019.
+
+\bibitem{toscano2012}
+Luca Toscano, Gabriele D'Angelo, and Moreno Marzolla.
+\newblock Parallel discrete event simulation with {E}rlang.
+\newblock \emph{arXiv:1206.2775}, 2012.
+
+\end{thebibliography}
+
+\end{document}

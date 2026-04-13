@@ -9,8 +9,8 @@ defmodule Sim.DSL.ConveyorTest do
     use Sim.DSL
 
     model :simple_belt do
-      conveyor :belt, length: 100, speed: 10, capacity: 50
-      resource :machine, capacity: 1
+      conveyor(:belt, length: 100, speed: 10, capacity: 50)
+      resource(:machine, capacity: 1)
 
       process :part do
         arrive(every: exponential(5.0))
@@ -31,8 +31,8 @@ defmodule Sim.DSL.ConveyorTest do
     use Sim.DSL
 
     model :narrow_belt do
-      conveyor :belt, length: 50, speed: 5, capacity: 2
-      resource :machine, capacity: 1
+      conveyor(:belt, length: 50, speed: 5, capacity: 2)
+      resource(:machine, capacity: 1)
 
       process :part do
         arrive(every: exponential(2.0))
@@ -53,9 +53,9 @@ defmodule Sim.DSL.ConveyorTest do
     use Sim.DSL
 
     model :dual_belt do
-      conveyor :belt_a, length: 50, speed: 10, capacity: 10
-      conveyor :belt_b, length: 80, speed: 5, capacity: 10
-      resource :machine, capacity: 1
+      conveyor(:belt_a, length: 50, speed: 10, capacity: 10)
+      conveyor(:belt_b, length: 80, speed: 5, capacity: 10)
+      resource(:machine, capacity: 1)
 
       process :part do
         arrive(every: exponential(5.0))

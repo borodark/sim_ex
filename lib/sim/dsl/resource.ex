@@ -193,6 +193,22 @@ defmodule Sim.DSL.Resource do
   # ============================================================
   # Private: preemptive seize
   # ============================================================
+  #
+  # NOTE on pattern-match refactor: attempted to split this into
+  # `grant_or_queue/4` + `try_preempt_or_enqueue/4` pattern-matched
+  # helpers. The result was 4 functions with 5 clauses each carrying
+  # a 4-arg parameter list, plus a new `req` tuple abstraction.
+  # Verdict: the branches are single-call-site dispatchers, the
+  # parameter-threading ceremony outweighed the clarity gain, and
+  # the linear decision tree (capacity → preempt check → enqueue)
+  # reads more coherently top-to-bottom here than fragmented across
+  # helpers. Kept as-is per the "when NOT to apply" clause of the
+  # defp pattern-match rule. This function is also guarded by the
+  # Resource model in test/statham_test.exs — the same module whose
+  # ungranted-release bug was the subject of the "Release That Never
+  # Seized" post (Apr 2026). Any future refactor here must re-run
+  # that property suite.
+  # ============================================================
 
   defp handle_seize_preemptive(job_id, requestor_id, priority, clock, state) do
     state = maybe_update_capacity(state, clock)
@@ -202,8 +218,7 @@ defmodule Sim.DSL.Resource do
       grant_event = make_event(clock, requestor_id, {:grant, state.id, job_id})
       holders = Map.put(state.holders, job_id, {requestor_id, priority, clock_to_number(clock)})
 
-      {:ok,
-       %{state | busy: state.busy + 1, grants: state.grants + 1, holders: holders},
+      {:ok, %{state | busy: state.busy + 1, grants: state.grants + 1, holders: holders},
        [grant_event]}
     else
       # At capacity — check if incoming priority beats worst holder
@@ -233,17 +248,23 @@ defmodule Sim.DSL.Resource do
 
           # Re-queue the ejected entity with its remaining service time
           seq = state.queue_seq
-          queue = :gb_trees.insert({worst_priority, seq}, {worst_job_id, worst_requestor_id, remaining}, state.queue)
+
+          queue =
+            :gb_trees.insert(
+              {worst_priority, seq},
+              {worst_job_id, worst_requestor_id, remaining},
+              state.queue
+            )
 
           {:ok,
-           %{state |
-             holders: holders,
-             grants: state.grants + 1,
-             preemptions: state.preemptions + 1,
-             queue: queue,
-             queue_seq: seq + 1
-           },
-           [grant_event, preempted_event]}
+           %{
+             state
+             | holders: holders,
+               grants: state.grants + 1,
+               preemptions: state.preemptions + 1,
+               queue: queue,
+               queue_seq: seq + 1
+           }, [grant_event, preempted_event]}
 
         _ ->
           # Incoming does NOT beat worst holder — enqueue
@@ -272,66 +293,84 @@ defmodule Sim.DSL.Resource do
   # ============================================================
 
   defp grant_from_queue(%{busy: busy, capacity: cap} = state, clock) when busy < cap do
-    case :queue.out(state.queue) do
-      {{:value, {job_id, requestor_id}}, queue} ->
-        grant = make_event(clock, requestor_id, {:grant, state.id, job_id})
-        state = %{state | queue: queue, busy: state.busy + 1, grants: state.grants + 1}
-        # Recurse: capacity may allow more grants
-        {:ok, state, more_grants} = grant_from_queue(state, clock)
-        {:ok, state, [grant | more_grants]}
-
-      {:empty, _} ->
-        {:ok, state, []}
-    end
+    state.queue |> :queue.out() |> do_grant_from_queue(state, clock)
   end
 
   defp grant_from_queue(state, _clock), do: {:ok, state, []}
+
+  # Pattern-matched dispatch on the :queue.out/1 result:
+  # empty queue → done; value popped → grant and recurse.
+  defp do_grant_from_queue({:empty, _}, state, _clock), do: {:ok, state, []}
+
+  defp do_grant_from_queue({{:value, {job_id, requestor_id}}, queue}, state, clock) do
+    grant = make_event(clock, requestor_id, {:grant, state.id, job_id})
+    state = %{state | queue: queue, busy: state.busy + 1, grants: state.grants + 1}
+    # Recurse: capacity may allow more grants
+    {:ok, state, more_grants} = grant_from_queue(state, clock)
+    {:ok, state, [grant | more_grants]}
+  end
 
   # ============================================================
   # Private: grant from queue (preemptive — :gb_trees)
   # ============================================================
 
   defp grant_from_queue_preemptive(%{busy: busy, capacity: cap} = state, clock) when busy < cap do
-    case :gb_trees.is_empty(state.queue) do
-      true ->
-        {:ok, state, []}
-
-      false ->
-        {{priority, _seq}, {job_id, requestor_id, _remaining}, queue} =
-          :gb_trees.take_smallest(state.queue)
-
-        grant = make_event(clock, requestor_id, {:grant, state.id, job_id})
-        holders = Map.put(state.holders, job_id, {requestor_id, priority, clock_to_number(clock)})
-
-        state = %{state | queue: queue, busy: state.busy + 1, grants: state.grants + 1, holders: holders}
-        {:ok, state, more_grants} = grant_from_queue_preemptive(state, clock)
-        {:ok, state, [grant | more_grants]}
-    end
+    state.queue |> :gb_trees.is_empty() |> do_grant_preemptive(state, clock)
   end
 
   defp grant_from_queue_preemptive(state, _clock), do: {:ok, state, []}
+
+  # Pattern-matched dispatch on the gb_trees emptiness check:
+  # empty → done; non-empty → take smallest and recurse.
+  defp do_grant_preemptive(true, state, _clock), do: {:ok, state, []}
+
+  defp do_grant_preemptive(false, state, clock) do
+    {{priority, _seq}, {job_id, requestor_id, _remaining}, queue} =
+      :gb_trees.take_smallest(state.queue)
+
+    grant = make_event(clock, requestor_id, {:grant, state.id, job_id})
+    holders = Map.put(state.holders, job_id, {requestor_id, priority, clock_to_number(clock)})
+
+    state = %{
+      state
+      | queue: queue,
+        busy: state.busy + 1,
+        grants: state.grants + 1,
+        holders: holders
+    }
+
+    {:ok, state, more_grants} = grant_from_queue_preemptive(state, clock)
+    {:ok, state, [grant | more_grants]}
+  end
 
   # --- Private: schedule capacity ---
 
   defp maybe_update_capacity(%{schedule: nil} = state, _clock), do: state
 
-  defp maybe_update_capacity(%{schedule: schedule, capacity: old_cap} = state, clock) do
+  defp maybe_update_capacity(%{schedule: schedule} = state, clock) do
     new_cap = schedule_capacity(schedule, clock_to_number(clock))
+    apply_capacity_change(new_cap, state.capacity, state, clock)
+  end
 
-    case new_cap do
-      ^old_cap -> state
-      _ -> %{state | capacity: new_cap, last_capacity_check: clock_to_number(clock)}
-    end
+  # Same-position binding: if new_cap equals old_cap, this clause matches
+  # (both get bound to `cap`) and the state passes through unchanged.
+  defp apply_capacity_change(cap, cap, state, _clock), do: state
+
+  defp apply_capacity_change(new_cap, _old_cap, state, clock) do
+    %{state | capacity: new_cap, last_capacity_check: clock_to_number(clock)}
   end
 
   defp schedule_capacity(schedule, t) do
     t_int = trunc(t)
-
-    case find_in_schedule(schedule, t_int) do
-      {:ok, cap} -> cap
-      :not_found -> schedule_capacity_wrapped(schedule, t_int)
-    end
+    find_in_schedule(schedule, t_int) |> resolve_schedule_hit(schedule, t_int)
   end
+
+  # Pattern-matched dispatch: if the direct lookup hit, return it;
+  # otherwise fall through to the wrap-around search.
+  defp resolve_schedule_hit({:ok, cap}, _schedule, _t_int), do: cap
+
+  defp resolve_schedule_hit(:not_found, schedule, t_int),
+    do: schedule_capacity_wrapped(schedule, t_int)
 
   defp find_in_schedule([], _t), do: :not_found
 
@@ -349,11 +388,13 @@ defmodule Sim.DSL.Resource do
   defp schedule_capacity_mod(_schedule, _t, 0), do: 1
 
   defp schedule_capacity_mod(schedule, t_int, total) do
-    case find_in_schedule(schedule, rem(t_int, total)) do
-      {:ok, cap} -> cap
-      :not_found -> elem(hd(schedule), 1)
-    end
+    find_in_schedule(schedule, rem(t_int, total)) |> resolve_mod_hit(schedule)
   end
+
+  # Pattern-matched dispatch for the mod-wrapped search: hit returns the cap;
+  # miss falls back to the first schedule entry (graceful degradation).
+  defp resolve_mod_hit({:ok, cap}, _schedule), do: cap
+  defp resolve_mod_hit(:not_found, schedule), do: elem(hd(schedule), 1)
 
   # --- Private: clock format dispatch ---
 

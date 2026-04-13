@@ -139,11 +139,14 @@ defmodule Sim.Statham do
       Sim.Engine.init(
         entities: [
           {:customer_source, Sim.Source,
-           %{id: :customer_source, target: :barber,
-             interarrival: {:exponential, 18.0}, seed: seed}},
+           %{
+             id: :customer_source,
+             target: :barber,
+             interarrival: {:exponential, 18.0},
+             seed: seed
+           }},
           {:barber, Sim.Resource,
-           %{id: :barber, capacity: 1,
-             service: {:exponential, 16.0}, seed: seed + 1000}}
+           %{id: :barber, capacity: 1, service: {:exponential, 16.0}, seed: seed + 1000}}
         ],
         initial_events: [{0.0, :customer_source, :generate}],
         stop_time: stop_time
@@ -192,7 +195,9 @@ defmodule Sim.Statham do
     # INVARIANT: every pending event targets a registered entity
     targets_ok =
       case :gb_trees.is_empty(eng.calendar) do
-        true -> true
+        true ->
+          true
+
         false ->
           :gb_trees.values(eng.calendar)
           |> Enum.all?(fn {target, _} -> Map.has_key?(eng.entities, target) end)
@@ -216,7 +221,10 @@ defmodule Sim.Statham do
 
   def precondition(%{initialized: false}, {:call, _, :do_init, _}), do: true
   def precondition(%{initialized: true}, {:call, _, :do_step, _}), do: true
-  def precondition(%{initialized: true, calendar_size: cs}, {:call, _, :do_run_n, _}) when cs > 0, do: true
+
+  def precondition(%{initialized: true, calendar_size: cs}, {:call, _, :do_run_n, _}) when cs > 0,
+    do: true
+
   def precondition(%{initialized: true}, {:call, _, :do_check, _}), do: true
   def precondition(_, _), do: false
 
@@ -233,12 +241,17 @@ defmodule Sim.Statham do
     case status do
       :ok ->
         # Clock never goes backward
+        # Events processed increments by exactly 1
         new_clock >= state.clock and
-          # Events processed increments by exactly 1
           new_ep == state.events_processed + 1
 
-      :done -> true   # Calendar was empty — valid terminal
-      :stopped -> true # Past stop_time — valid terminal
+      # Calendar was empty — valid terminal
+      :done ->
+        true
+
+      # Past stop_time — valid terminal
+      :stopped ->
+        true
     end
   end
 
@@ -358,8 +371,10 @@ defmodule Sim.Statham.Resource do
       grants: 0,
       releases: 0,
       preemptive: false,
-      holder_jobs: [],   # job IDs currently holding the resource
-      next_job: 1        # monotonic job ID counter
+      # job IDs currently holding the resource
+      holder_jobs: [],
+      # monotonic job ID counter
+      next_job: 1
     }
   end
 
@@ -368,7 +383,7 @@ defmodule Sim.Statham.Resource do
   # Before init: only valid command is init with random capacity and preemptive flag
   def command(%{initialized: false}) do
     frequency([
-      {1, {:call, __MODULE__, :init_resource, [integer(1, 4), boolean()]}},
+      {1, {:call, __MODULE__, :init_resource, [integer(1, 4), boolean()]}}
     ])
   end
 
@@ -383,11 +398,12 @@ defmodule Sim.Statham.Resource do
     # Using `oneof(state.holder_jobs)` ensures we never release
     # an ungranted job — that's the fixed version. The bug was
     # found when this included state.next_job (ungranted).
-    cmds = if state.holder_jobs != [] do
-      [{3, {:call, __MODULE__, :release, [oneof(state.holder_jobs)]}} | cmds]
-    else
-      cmds
-    end
+    cmds =
+      if state.holder_jobs != [] do
+        [{3, {:call, __MODULE__, :release, [oneof(state.holder_jobs)]}} | cmds]
+      else
+        cmds
+      end
 
     frequency(cmds)
   end
@@ -396,12 +412,14 @@ defmodule Sim.Statham.Resource do
 
   # Initialize a resource with random capacity and preemptive flag
   def init_resource(capacity, preemptive) do
-    {:ok, state} = Sim.DSL.Resource.init(%{
-      id: :test_resource,
-      capacity: capacity,
-      preemptive: preemptive,
-      seed: 42
-    })
+    {:ok, state} =
+      Sim.DSL.Resource.init(%{
+        id: :test_resource,
+        capacity: capacity,
+        preemptive: preemptive,
+        seed: 42
+      })
+
     set_resource(state)
     {:ok, capacity, preemptive}
   end
@@ -413,28 +431,31 @@ defmodule Sim.Statham.Resource do
 
     # Preemptive resources use 4-tuple with priority;
     # non-preemptive use 3-tuple (priority ignored)
-    event = if res.preemptive do
-      {:seize_request, job_id, :test_process, priority}
-    else
-      {:seize_request, job_id, :test_process}
-    end
+    event =
+      if res.preemptive do
+        {:seize_request, job_id, :test_process, priority}
+      else
+        {:seize_request, job_id, :test_process}
+      end
 
     {:ok, new_res, events} = Sim.DSL.Resource.handle_event(event, 100.0, res)
     set_resource(new_res)
 
     # Check if a grant event was emitted for this job
-    granted = Enum.any?(events, fn
-      {_, _, {:grant, _, ^job_id}} -> true
-      _ -> false
-    end)
+    granted =
+      Enum.any?(events, fn
+        {_, _, {:grant, _, ^job_id}} -> true
+        _ -> false
+      end)
 
     # Collect any preempted job IDs (preemptive mode only)
-    preempted_jobs = events
-    |> Enum.filter(fn
-      {_, _, {:preempted, _, _, _}} -> true
-      _ -> false
-    end)
-    |> Enum.map(fn {_, _, {:preempted, _, job, _}} -> job end)
+    preempted_jobs =
+      events
+      |> Enum.filter(fn
+        {_, _, {:preempted, _, _, _}} -> true
+        _ -> false
+      end)
+      |> Enum.map(fn {_, _, {:preempted, _, job, _}} -> job end)
 
     {:seize, granted, new_res.busy, new_res.grants, preempted_jobs}
   end
@@ -447,10 +468,11 @@ defmodule Sim.Statham.Resource do
     set_resource(new_res)
 
     # Count grant events (queue drain after release)
-    queue_grants = Enum.count(events, fn
-      {_, _, {:grant, _, _}} -> true
-      _ -> false
-    end)
+    queue_grants =
+      Enum.count(events, fn
+        {_, _, {:grant, _, _}} -> true
+        _ -> false
+      end)
 
     {:release, new_res.busy, new_res.releases, queue_grants}
   end
@@ -458,11 +480,13 @@ defmodule Sim.Statham.Resource do
   # Snapshot the resource state for invariant checking
   def check_resource do
     res = get_resource()
-    queue_len = if res.preemptive do
-      :gb_trees.size(res.queue)
-    else
-      :queue.len(res.queue)
-    end
+
+    queue_len =
+      if res.preemptive do
+        :gb_trees.size(res.queue)
+      else
+        :queue.len(res.queue)
+      end
 
     %{
       busy: res.busy,
@@ -489,25 +513,33 @@ defmodule Sim.Statham.Resource do
     cap >= 1
   end
 
-  def postcondition(state, {:call, _, :seize, [_job, _prio]}, {:seize, granted, busy, _grants, _preempted}) do
+  def postcondition(
+        state,
+        {:call, _, :seize, [_job, _prio]},
+        {:seize, granted, busy, _grants, _preempted}
+      ) do
     # INVARIANT: busy NEVER exceeds capacity
-    busy <= state.capacity and
     # INVARIANT: if capacity was available, the seize must be granted
-    (if state.busy < state.capacity, do: granted, else: true)
+    busy <= state.capacity and
+      if state.busy < state.capacity, do: granted, else: true
   end
 
-  def postcondition(state, {:call, _, :release, [_job]}, {:release, busy, releases, _queue_grants}) do
+  def postcondition(
+        state,
+        {:call, _, :release, [_job]},
+        {:release, busy, releases, _queue_grants}
+      ) do
     # INVARIANT: busy doesn't exceed capacity (may refill from queue)
-    busy <= state.capacity and
     # INVARIANT: releases incremented by exactly 1
-    releases == state.releases + 1
+    busy <= state.capacity and
+      releases == state.releases + 1
   end
 
   def postcondition(_state, {:call, _, :check_resource, _}, result) do
     # INVARIANT: busy <= capacity
-    result.busy_lte_cap and
     # INVARIANT: grants >= releases (the bug that was found and fixed)
-    result.grants >= result.releases
+    result.busy_lte_cap and
+      result.grants >= result.releases
   end
 
   def postcondition(_, _, _), do: true
@@ -522,47 +554,41 @@ defmodule Sim.Statham.Resource do
     case result do
       # Dynamic phase: real values, update precisely
       {:seize, granted, busy, grants, preempted} when is_boolean(granted) ->
-        holders = if granted do
-          (state.holder_jobs -- preempted) ++ [job_id]
-        else
-          state.holder_jobs -- preempted
-        end
+        holders =
+          if granted do
+            (state.holder_jobs -- preempted) ++ [job_id]
+          else
+            state.holder_jobs -- preempted
+          end
 
-        %{state |
-          busy: busy,
-          grants: grants,
-          holder_jobs: holders,
-          next_job: state.next_job + 1
-        }
+        %{state | busy: busy, grants: grants, holder_jobs: holders, next_job: state.next_job + 1}
 
       # Symbolic phase: optimistic prediction
       # Assume grant if capacity available (needed so release commands
       # can be generated — without this, holder_jobs stays empty and
       # no release commands are ever generated)
       _ ->
-        holders = if state.busy < state.capacity do
-          state.holder_jobs ++ [job_id]
-        else
-          state.holder_jobs
-        end
+        holders =
+          if state.busy < state.capacity do
+            state.holder_jobs ++ [job_id]
+          else
+            state.holder_jobs
+          end
 
         busy = min(state.busy + 1, state.capacity)
 
-        %{state |
-          busy: busy,
-          holder_jobs: holders,
-          next_job: state.next_job + 1
-        }
+        %{state | busy: busy, holder_jobs: holders, next_job: state.next_job + 1}
     end
   end
 
   def next_state(state, result, {:call, _, :release, [job_id]}) do
     case result do
       {:release, busy, releases, _queue_grants} when is_integer(busy) ->
-        %{state |
-          busy: busy,
-          releases: releases,
-          holder_jobs: List.delete(state.holder_jobs, job_id)
+        %{
+          state
+          | busy: busy,
+            releases: releases,
+            holder_jobs: List.delete(state.holder_jobs, job_id)
         }
 
       _ ->
@@ -647,12 +673,15 @@ defmodule Sim.Statham.Adversarial do
         entities: [
           # Normal orders: frequent (every 5 time units), low priority (5)
           {:normal_source, Sim.Source,
-           %{id: :normal_source, target: :machine,
-             interarrival: {:exponential, 5.0}, seed: seed}},
+           %{id: :normal_source, target: :machine, interarrival: {:exponential, 5.0}, seed: seed}},
           # Rush orders: rare (every 50 time units), high priority (1)
           {:rush_source, Sim.Source,
-           %{id: :rush_source, target: :machine,
-             interarrival: {:exponential, 50.0}, seed: seed + 5000}},
+           %{
+             id: :rush_source,
+             target: :machine,
+             interarrival: {:exponential, 50.0},
+             seed: seed + 5000
+           }},
           # Machine: capacity 1, preemptive — rush orders eject normal orders
           {:machine, Sim.DSL.Resource,
            %{id: :machine, capacity: 1, preemptive: true, seed: seed + 1000}}
@@ -671,13 +700,16 @@ defmodule Sim.Statham.Adversarial do
   # Single step
   def do_step do
     eng = get_engine()
+
     case Sim.Engine.step(eng) do
       {:ok, new_eng} ->
         set_engine(new_eng)
         {:ok, new_eng.clock, new_eng.events_processed, :gb_trees.size(new_eng.calendar)}
+
       {:done, new_eng} ->
         set_engine(new_eng)
         {:done, new_eng.clock, new_eng.events_processed, 0}
+
       {:stopped, new_eng} ->
         set_engine(new_eng)
         {:stopped, new_eng.clock, new_eng.events_processed, :gb_trees.size(new_eng.calendar)}
@@ -714,7 +746,10 @@ defmodule Sim.Statham.Adversarial do
 
   def precondition(%{initialized: false}, {:call, _, :do_init, _}), do: true
   def precondition(%{initialized: true}, {:call, _, :do_step, _}), do: true
-  def precondition(%{initialized: true, calendar_size: cs}, {:call, _, :do_run_n, _}) when cs > 0, do: true
+
+  def precondition(%{initialized: true, calendar_size: cs}, {:call, _, :do_run_n, _}) when cs > 0,
+    do: true
+
   def precondition(%{initialized: true}, {:call, _, :do_check, _}), do: true
   def precondition(_, _), do: false
 
@@ -752,9 +787,15 @@ defmodule Sim.Statham.Adversarial do
     case result do
       {:ok, clock, ep, cs} when is_number(clock) ->
         %{state | clock: clock, events_processed: ep, calendar_size: cs}
-      {:done, _, _, _} -> %{state | calendar_size: 0}
-      {:stopped, _, _, _} -> state
-      _ -> %{state | events_processed: state.events_processed + 1}
+
+      {:done, _, _, _} ->
+        %{state | calendar_size: 0}
+
+      {:stopped, _, _, _} ->
+        state
+
+      _ ->
+        %{state | events_processed: state.events_processed + 1}
     end
   end
 
@@ -762,7 +803,9 @@ defmodule Sim.Statham.Adversarial do
     case result do
       {_, clock, ep, cs} when is_number(clock) ->
         %{state | clock: clock, events_processed: ep, calendar_size: cs}
-      _ -> state
+
+      _ ->
+        state
     end
   end
 
@@ -771,6 +814,7 @@ defmodule Sim.Statham.Adversarial do
   # --- Helpers ---
 
   defp run_steps(engine, 0), do: {:ok, engine}
+
   defp run_steps(engine, n) do
     case Sim.Engine.step(engine) do
       {:ok, eng} -> run_steps(eng, n - 1)
@@ -806,7 +850,7 @@ end
 defmodule Sim.StathamTest do
   use ExUnit.Case
   use PropCheck
-  use PropCheck.StateM
+  import PropCheck.StateM, only: [commands: 1, run_commands: 2, command_names: 1]
 
   @moduletag timeout: 120_000
 
@@ -851,7 +895,10 @@ defmodule Sim.StathamTest do
   end
 
   # Model 3: Adversarial preemptive — 200 sequences
-  property "preemptive engine: busy <= cap, grants >= releases under preemption", [:verbose, numtests: 200] do
+  property "preemptive engine: busy <= cap, grants >= releases under preemption", [
+    :verbose,
+    numtests: 200
+  ] do
     forall cmds <- commands(Sim.Statham.Adversarial) do
       Process.delete(:statham_adversarial)
 

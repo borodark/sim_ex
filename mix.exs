@@ -33,7 +33,9 @@ defmodule Sim.MixProject do
     [
       {:rustler, "~> 0.36", runtime: false},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
-      {:propcheck, "~> 1.4", only: :test, runtime: false}
+      {:propcheck, "~> 1.4", only: :test, runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 

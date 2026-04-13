@@ -77,39 +77,7 @@ defmodule Sim.Engine do
   Used by `proper_statem` for stateful property testing.
   Production code uses `loop/1` which calls this in a tight loop.
   """
-  def step(engine) do
-    case :gb_trees.is_empty(engine.calendar) do
-      true ->
-        {:done, engine}
-
-      false ->
-        {{time, _seq}, {target, event}, calendar} =
-          :gb_trees.take_smallest(engine.calendar)
-
-        if time > engine.stop_time do
-          {:stopped, engine}
-        else
-          module = Map.fetch!(engine.modules, target)
-          entity_state = Map.fetch!(engine.entities, target)
-
-          {:ok, new_entity_state, new_events} =
-            module.handle_event(event, time, entity_state)
-
-          {calendar, seq} = insert_events(calendar, engine.seq, new_events)
-
-          engine = %{
-            engine
-            | calendar: calendar,
-              entities: Map.put(engine.entities, target, new_entity_state),
-              seq: seq,
-              clock: time,
-              events_processed: engine.events_processed + 1
-          }
-
-          {:ok, engine}
-        end
-    end
-  end
+  def step(engine), do: advance_one(engine)
 
   @doc """
   Initialize an engine struct from opts without running it.
@@ -143,41 +111,44 @@ defmodule Sim.Engine do
 
   # --- Tight loop: no GenServer, no message passing ---
 
-  defp loop(engine) do
-    case :gb_trees.is_empty(engine.calendar) do
-      true ->
-        engine
+  defp loop(engine), do: engine |> advance_one() |> continue_loop()
 
-      false ->
-        {{time, _seq}, {target, event}, calendar} =
-          :gb_trees.take_smallest(engine.calendar)
+  defp continue_loop({:ok, engine}), do: loop(engine)
+  defp continue_loop({:done, engine}), do: engine
+  defp continue_loop({:stopped, engine}), do: engine
 
-        if time > engine.stop_time do
-          engine
-        else
-          # Dispatch directly — no GenServer call
-          module = Map.fetch!(engine.modules, target)
-          entity_state = Map.fetch!(engine.entities, target)
+  defp advance_one(engine) do
+    engine.calendar |> :gb_trees.is_empty() |> handle_pop(engine)
+  end
 
-          {:ok, new_entity_state, new_events} =
-            module.handle_event(event, time, entity_state)
+  defp handle_pop(true, engine), do: {:done, engine}
 
-          # Insert new events directly into tree
-          {calendar, seq} =
-            insert_events(calendar, engine.seq, new_events)
+  defp handle_pop(false, engine) do
+    engine.calendar |> :gb_trees.take_smallest() |> step_forward(engine)
+  end
 
-          engine = %{
-            engine
-            | calendar: calendar,
-              entities: Map.put(engine.entities, target, new_entity_state),
-              seq: seq,
-              clock: time,
-              events_processed: engine.events_processed + 1
-          }
+  defp step_forward({{time, _seq}, _ev, _cal}, %{stop_time: stop_time} = engine)
+       when time > stop_time,
+       do: {:stopped, engine}
 
-          loop(engine)
-        end
-    end
+  defp step_forward({{time, _seq}, {target, event}, calendar}, engine) do
+    module = Map.fetch!(engine.modules, target)
+    entity_state = Map.fetch!(engine.entities, target)
+
+    {:ok, new_entity_state, new_events} =
+      module.handle_event(event, time, entity_state)
+
+    {calendar, seq} = insert_events(calendar, engine.seq, new_events)
+
+    {:ok,
+     %{
+       engine
+       | calendar: calendar,
+         entities: Map.put(engine.entities, target, new_entity_state),
+         seq: seq,
+         clock: time,
+         events_processed: engine.events_processed + 1
+     }}
   end
 
   @compile {:inline, insert_events: 3}

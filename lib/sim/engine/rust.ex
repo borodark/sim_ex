@@ -120,7 +120,10 @@ defmodule Sim.Engine.Rust do
   defp encode_step({:seize, res_idx}, _label_map), do: {"seize", [res_idx * 1.0]}
   defp encode_step({:hold, {:exponential, mean}}, _label_map), do: {"hold_exp", [mean * 1.0]}
   defp encode_step({:hold, {:constant, val}}, _label_map), do: {"hold_const", [val * 1.0]}
-  defp encode_step({:hold, {:uniform, {a, b}}}, _label_map), do: {"hold_uniform", [a * 1.0, b * 1.0]}
+
+  defp encode_step({:hold, {:uniform, {a, b}}}, _label_map),
+    do: {"hold_uniform", [a * 1.0, b * 1.0]}
+
   defp encode_step({:release, res_idx}, _label_map), do: {"release", [res_idx * 1.0]}
   defp encode_step(:depart, _label_map), do: {"depart", []}
   defp encode_step({:depart, _}, _label_map), do: {"depart", []}
@@ -146,7 +149,9 @@ defmodule Sim.Engine.Rust do
 
   defp encode_step({:route, {:exponential, mean}}, _label_map), do: {"route_exp", [mean * 1.0]}
   defp encode_step({:route, {:constant, val}}, _label_map), do: {"route_const", [val * 1.0]}
-  defp encode_step({:route, {:uniform, {a, b}}}, _label_map), do: {"route_uniform", [a * 1.0, b * 1.0]}
+
+  defp encode_step({:route, {:uniform, {a, b}}}, _label_map),
+    do: {"route_uniform", [a * 1.0, b * 1.0]}
 
   defp encode_step({:batch, count}, _label_map), do: {"batch", [count * 1.0]}
   defp encode_step({:split, count}, _label_map), do: {"split", [count * 1.0]}

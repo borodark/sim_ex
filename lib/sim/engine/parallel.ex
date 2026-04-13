@@ -149,40 +149,57 @@ defmodule Sim.Engine.Parallel do
 
   # --- Main loop: drain diasca → dispatch → merge → repeat ---
 
-  defp loop(engine) do
-    case :gb_trees.is_empty(engine.calendar) do
-      true ->
-        engine
+  defp loop(engine), do: engine |> advance_one() |> continue_loop()
 
-      false ->
-        {{tick, diasca, _seq}, _val} = :gb_trees.smallest(engine.calendar)
+  defp continue_loop({:ok, engine}), do: loop(engine)
+  defp continue_loop({:done, engine}), do: engine
+  defp continue_loop({:stopped, engine}), do: engine
 
-        if tick > engine.stop_tick do
-          engine
-        else
-          {events, calendar} = drain_diasca(engine.calendar, tick, diasca)
-          count = length(events)
+  defp advance_one(engine) do
+    engine.calendar |> :gb_trees.is_empty() |> peek_next(engine)
+  end
 
-          new_events =
-            if count >= engine.threshold do
-              dispatch_parallel(events, engine, tick, diasca)
-            else
-              dispatch_sequential(events, engine, tick, diasca)
-            end
+  defp peek_next(true, engine), do: {:done, engine}
 
-          {calendar, seq} = insert_diasca_events(calendar, engine.seq, tick, diasca, new_events)
+  defp peek_next(false, engine) do
+    engine.calendar |> :gb_trees.smallest() |> step_forward(engine)
+  end
 
-          %{
-            engine
-            | calendar: calendar,
-              seq: seq,
-              tick: tick,
-              diasca: diasca,
-              events_processed: engine.events_processed + count
-          }
-          |> loop()
-        end
-    end
+  defp step_forward({{tick, _diasca, _seq}, _val}, %{stop_tick: stop_tick} = engine)
+       when tick > stop_tick,
+       do: {:stopped, engine}
+
+  defp step_forward({{tick, diasca, _seq}, _val}, engine) do
+    {events, calendar} = drain_diasca(engine.calendar, tick, diasca)
+    count = length(events)
+
+    # Threshold routing: parallel vs sequential dispatch based on batch size.
+    # Kept as `if` intentionally — this is a pure numeric comparison on a
+    # computed value (count vs engine.threshold), both branches call
+    # single-argument helpers with identical signatures, and the decision
+    # is a one-line routing choice with no additional state. Pattern-matching
+    # this into two helper clauses adds a function definition and a head
+    # dispatch without any readability gain. Falls under "when NOT to apply"
+    # in the defp pattern-match rule — pure numeric routing on a computed
+    # value is already as literal as it can be.
+    new_events =
+      if count >= engine.threshold do
+        dispatch_parallel(events, engine, tick, diasca)
+      else
+        dispatch_sequential(events, engine, tick, diasca)
+      end
+
+    {calendar, seq} = insert_diasca_events(calendar, engine.seq, tick, diasca, new_events)
+
+    {:ok,
+     %{
+       engine
+       | calendar: calendar,
+         seq: seq,
+         tick: tick,
+         diasca: diasca,
+         events_processed: engine.events_processed + count
+     }}
   end
 
   # --- Drain all events at {tick, diasca} ---
@@ -192,21 +209,23 @@ defmodule Sim.Engine.Parallel do
   end
 
   defp drain_diasca(calendar, tick, diasca, acc) do
-    case :gb_trees.is_empty(calendar) do
-      true ->
-        {acc, calendar}
-
-      false ->
-        {{t, d, _seq}, _val} = :gb_trees.smallest(calendar)
-
-        if t == tick and d == diasca do
-          {_key, {target, event}, calendar} = :gb_trees.take_smallest(calendar)
-          drain_diasca(calendar, tick, diasca, [{target, event} | acc])
-        else
-          {acc, calendar}
-        end
-    end
+    calendar |> :gb_trees.is_empty() |> drain_peek(calendar, tick, diasca, acc)
   end
+
+  defp drain_peek(true, calendar, _tick, _diasca, acc), do: {acc, calendar}
+
+  defp drain_peek(false, calendar, tick, diasca, acc) do
+    calendar |> :gb_trees.smallest() |> drain_match(calendar, tick, diasca, acc)
+  end
+
+  # Same-position binding: tick/diasca in the pattern must equal the function args.
+  # Matches only when the peeked event is at the current {tick, diasca}.
+  defp drain_match({{tick, diasca, _seq}, _val}, calendar, tick, diasca, acc) do
+    {_key, {target, event}, calendar} = :gb_trees.take_smallest(calendar)
+    drain_diasca(calendar, tick, diasca, [{target, event} | acc])
+  end
+
+  defp drain_match(_peeked, calendar, _tick, _diasca, acc), do: {acc, calendar}
 
   # --- Parallel dispatch via persistent worker pool ---
 
@@ -285,4 +304,18 @@ defmodule Sim.Engine.Parallel do
     calendar = :gb_trees.insert({tick + delta, 0, seq}, {target, event}, calendar)
     insert_diasca_events(calendar, seq + 1, tick, diasca, rest)
   end
+
+  # NOTE (Apr 2026): A naive bridge clause for bare {time, target, event}
+  # 3-tuples from float-mode entities was attempted here and reverted.
+  # The clause mapped same-time events (rounded <= current tick) to
+  # (tick, diasca + 1), which caused infinite diasca progression: each
+  # entity at the next diasca emitted another same-time event, which
+  # became diasca + 2, and so on without bound. The Barbershop DSL model
+  # spun two BEAM processes at 140% CPU before being killed.
+  #
+  # The architectural fix requires the DSL-compiled process modules and
+  # DSL.Resource to detect tick-mode (mode: :parallel | :diasca) at init
+  # time and emit (T, D)-tagged events accordingly, instead of bare
+  # 3-tuples. This is left as future work; for now, the parallel engine
+  # is documented as not supporting DSL models (paper §5 finding #2).
 end

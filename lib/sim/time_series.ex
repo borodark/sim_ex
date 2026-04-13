@@ -133,12 +133,14 @@ defmodule Sim.TimeSeries do
   defp compute_mean_queue([], _w_start, _w_end), do: 0.0
 
   defp compute_mean_queue(samples, w_start, w_end) do
-    window_samples =
-      Enum.filter(samples, fn {t, _} -> t >= w_start and t < w_end end)
-
-    case window_samples do
-      [] -> 0.0
-      s -> Enum.sum(Enum.map(s, fn {_, l} -> l end)) / length(s)
-    end
+    samples
+    |> Enum.filter(fn {t, _} -> t >= w_start and t < w_end end)
+    |> mean_of_window()
   end
+
+  # Pattern-matched dispatch: empty window → zero; non-empty → arithmetic mean.
+  defp mean_of_window([]), do: 0.0
+
+  defp mean_of_window(samples),
+    do: Enum.sum(Enum.map(samples, fn {_, l} -> l end)) / length(samples)
 end

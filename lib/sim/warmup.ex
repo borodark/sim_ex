@@ -87,6 +87,12 @@ defmodule Sim.Warmup do
     :not_found
   end
 
+  # NOTE on pattern-match refactor: kept as nested `if` intentionally.
+  # Both conditions are pure numeric comparisons on computed values
+  # (change vs threshold, counter vs min_steady). Lifting them into
+  # head-dispatched helpers would thread 9 parameters through boolean
+  # dispatcher functions. The iterative counter logic reads naturally
+  # as a top-to-bottom if/else/recurse within a single clause.
   defp find_run([change | rest], [idx | rest_idx], threshold, min_steady, consecutive, run_start) do
     if change < threshold do
       new_consecutive = consecutive + 1

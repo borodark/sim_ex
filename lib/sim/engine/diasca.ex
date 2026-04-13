@@ -86,40 +86,46 @@ defmodule Sim.Engine.Diasca do
 
   # --- Tight loop ---
 
-  defp loop(engine) do
-    case :gb_trees.is_empty(engine.calendar) do
-      true ->
-        engine
+  defp loop(engine), do: engine |> advance_one() |> continue_loop()
 
-      false ->
-        {{tick, diasca, _seq}, {target, event}, calendar} =
-          :gb_trees.take_smallest(engine.calendar)
+  defp continue_loop({:ok, engine}), do: loop(engine)
+  defp continue_loop({:done, engine}), do: engine
+  defp continue_loop({:stopped, engine}), do: engine
 
-        if tick > engine.stop_tick do
-          engine
-        else
-          module = Map.fetch!(engine.modules, target)
-          entity_state = Map.fetch!(engine.entities, target)
+  defp advance_one(engine) do
+    engine.calendar |> :gb_trees.is_empty() |> handle_pop(engine)
+  end
 
-          {:ok, new_state, new_events} =
-            module.handle_event(event, {tick, diasca}, entity_state)
+  defp handle_pop(true, engine), do: {:done, engine}
 
-          {calendar, seq} =
-            insert_diasca_events(calendar, engine.seq, tick, diasca, new_events)
+  defp handle_pop(false, engine) do
+    engine.calendar |> :gb_trees.take_smallest() |> step_forward(engine)
+  end
 
-          %{
-            engine
-            | calendar: calendar,
-              entities: Map.put(engine.entities, target, new_state),
-              modules: engine.modules,
-              seq: seq,
-              tick: tick,
-              diasca: diasca,
-              events_processed: engine.events_processed + 1
-          }
-          |> loop()
-        end
-    end
+  defp step_forward({{tick, _diasca, _seq}, _ev, _cal}, %{stop_tick: stop_tick} = engine)
+       when tick > stop_tick,
+       do: {:stopped, engine}
+
+  defp step_forward({{tick, diasca, _seq}, {target, event}, calendar}, engine) do
+    module = Map.fetch!(engine.modules, target)
+    entity_state = Map.fetch!(engine.entities, target)
+
+    {:ok, new_state, new_events} =
+      module.handle_event(event, {tick, diasca}, entity_state)
+
+    {calendar, seq} =
+      insert_diasca_events(calendar, engine.seq, tick, diasca, new_events)
+
+    {:ok,
+     %{
+       engine
+       | calendar: calendar,
+         entities: Map.put(engine.entities, target, new_state),
+         seq: seq,
+         tick: tick,
+         diasca: diasca,
+         events_processed: engine.events_processed + 1
+     }}
   end
 
   # --- Event insertion with diasca stamping ---

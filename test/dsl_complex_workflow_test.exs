@@ -549,7 +549,7 @@ defmodule Sim.DSL.ComplexWorkflowTest do
       premium = r.stats[:premium_packer].grants
       bulk = r.stats[:bulk_packer].grants
 
-      total_packed = premium + bulk
+      _total_packed = premium + bulk
       assert sorted > 0
 
       # Premium should be more than bulk (60% vs 30% but batched differently)

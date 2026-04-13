@@ -123,22 +123,30 @@ defmodule Sim.Statistics do
     min = if value < metric.min, do: value, else: metric.min
     max = if value > metric.max, do: value, else: metric.max
 
-    metric = %{metric | n: n, mean: mean, m2: m2, min: min, max: max}
+    %{metric | n: n, mean: mean, m2: m2, min: min, max: max}
+    |> accumulate_batch(value)
+  end
 
-    # Batch means accumulation
-    if metric.batch_size do
-      batch_n = metric.batch_n + 1
-      batch_acc = metric.batch_acc + value
+  # No batch accumulation configured (batch_size is nil).
+  defp accumulate_batch(%{batch_size: nil} = metric, _value), do: metric
 
-      if batch_n >= metric.batch_size do
-        batch_mean = batch_acc / batch_n
-        %{metric | batch_n: 0, batch_acc: 0.0, batch_means: [batch_mean | metric.batch_means]}
-      else
-        %{metric | batch_n: batch_n, batch_acc: batch_acc}
-      end
-    else
-      metric
-    end
+  # Batch accumulation: add value to running batch, check for completion.
+  defp accumulate_batch(metric, value) do
+    batch_n = metric.batch_n + 1
+    batch_acc = metric.batch_acc + value
+    check_batch_complete(batch_n, batch_acc, metric)
+  end
+
+  # Batch full → compute mean and reset accumulator.
+  defp check_batch_complete(batch_n, batch_acc, %{batch_size: batch_size} = metric)
+       when batch_n >= batch_size do
+    batch_mean = batch_acc / batch_n
+    %{metric | batch_n: 0, batch_acc: 0.0, batch_means: [batch_mean | metric.batch_means]}
+  end
+
+  # Batch not yet full → update running accumulator.
+  defp check_batch_complete(batch_n, batch_acc, metric) do
+    %{metric | batch_n: batch_n, batch_acc: batch_acc}
   end
 
   defp metric_summary(%Metric{n: 0}), do: %{n: 0}

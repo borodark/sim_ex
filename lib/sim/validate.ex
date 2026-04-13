@@ -126,26 +126,26 @@ defmodule Sim.Validate do
   defp safe_mean([]), do: 0.0
   defp safe_mean(list), do: Enum.sum(list) / length(list)
 
-  # Two-sample Kolmogorov-Smirnov statistic
+  # Two-sample Kolmogorov-Smirnov statistic.
+  # Empty-list boundary handled at the head — no wasted sort.
+  defp ks_statistic([], _b), do: 1.0
+  defp ks_statistic(_a, []), do: 1.0
+
   defp ks_statistic(a, b) do
     sa = Enum.sort(a)
     sb = Enum.sort(b)
     na = length(sa)
     nb = length(sb)
 
-    if na == 0 or nb == 0 do
-      1.0
-    else
-      # Merge and compute max difference of empirical CDFs
-      all_values = Enum.uniq(Enum.sort(sa ++ sb))
+    # Merge and compute max difference of empirical CDFs
+    all_values = Enum.uniq(Enum.sort(sa ++ sb))
 
-      all_values
-      |> Enum.map(fn v ->
-        cdf_a = Enum.count(sa, &(&1 <= v)) / na
-        cdf_b = Enum.count(sb, &(&1 <= v)) / nb
-        abs(cdf_a - cdf_b)
-      end)
-      |> Enum.max()
-    end
+    all_values
+    |> Enum.map(fn v ->
+      cdf_a = Enum.count(sa, &(&1 <= v)) / na
+      cdf_b = Enum.count(sb, &(&1 <= v)) / nb
+      abs(cdf_a - cdf_b)
+    end)
+    |> Enum.max()
   end
 end
